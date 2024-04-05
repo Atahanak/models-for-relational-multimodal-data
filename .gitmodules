@@ -1,3 +1,0 @@
-[submodule "pytorch-frame"]
-	path = pytorch-frame
-	url = git@github.com:pyg-team/pytorch-frame.git

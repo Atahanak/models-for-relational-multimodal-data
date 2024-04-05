@@ -72,7 +72,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 maskable_columns = ['From Bank', 'From ID', 'To Bank', 'To ID', 'Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format']
                 self.df['MASK'] = None
                 self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
-                #col_to_stype['MASK'] = torch_frame.categorical
+                col_to_stype['MASK'] = torch_frame.mask
             else:
                 col_to_stype['Is Laundering'] = torch_frame.categorical
                 self.target_col = 'Is Laundering'
