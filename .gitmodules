@@ -1,0 +1,3 @@
+[submodule "pytorch-frame"]
+	path = pytorch-frame
+	url = git@github.com:Atahanak/pytorch-frame.git
