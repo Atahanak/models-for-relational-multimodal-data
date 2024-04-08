@@ -66,10 +66,7 @@ class FTTransformer(Module):
         self.pretrain = pretrain
         if pretrain:
             num_numerical = len(col_names_dict[stype.numerical])
-            #num_categorical = len(col_names_dict[stype.categorical])
-            #ic(num_numerical, num_categorical)
-            num_classes = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
-            #ic(num_classes)
+            num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
 
         if stype_encoder_dict is None:
             stype_encoder_dict = {
@@ -96,7 +93,7 @@ class FTTransformer(Module):
                 LayerNorm(channels),
                 ReLU(),
                 Linear(channels, num_classes),
-            ) for num_classes in num_classes])
+            ) for num_classes in num_categorical])
         else:
             self.decoder = Sequential(
                 LayerNorm(channels),
@@ -133,7 +130,12 @@ class FTTransformer(Module):
         """
         x, _ = self.encoder(tf)
         x, x_cls = self.backbone(x)
-        out = 0 #self.decoder(x_cls)
+        if self.pretrain:
+            num_out = self.num_decoder(x_cls)
+            cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
+            out = (num_out, cat_out)
+        else:
+            out = self.decoder(x_cls)
         return out
 
 if __name__ == '__main__':
@@ -144,19 +146,17 @@ if __name__ == '__main__':
 
     dataset = Yandex(root='/tmp/yandex', name='adult')
     ic(dataset)
-    ic(dataset.feat_cols)
+    # ic(dataset.feat_cols)
     dataset.materialize()
     is_classification = dataset.task_type.is_classification
 
     train_dataset, val_dataset, test_dataset = dataset.split()
     train_tensor_frame = train_dataset.tensor_frame
-    train_loader = DataLoader(train_tensor_frame, batch_size=32, shuffle=True)
+    train_loader = DataLoader(train_tensor_frame, batch_size=1, shuffle=True)
     example = next(iter(train_loader))
-    ic(example)
-    ic(example.get_col_feat('C_feature_1'))
-    ic(example.get_col_feat('N_feature_1'))
-    ic(example.y)
-    sys.exit()
+    # ic(example)
+    # ic(example.get_col_feat('C_feature_1'))
+    # ic(example.get_col_feat('N_feature_1'))
 
     numerical_encoder = LinearEncoder()
     stype_encoder_dict = {
@@ -178,3 +178,8 @@ if __name__ == '__main__':
         stype_encoder_dict=stype_encoder_dict,
         pretrain=True
     )
+
+    pred = model(example)
+    ic(example.y)
+    ic(pred[0])
+    ic(pred[1])
