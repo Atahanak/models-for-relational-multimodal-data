@@ -67,6 +67,7 @@ class FTTransformer(Module):
         if pretrain:
             num_numerical = len(col_names_dict[stype.numerical])
             num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
+            # num_cols = num_categorical + num_numerical
 
         if stype_encoder_dict is None:
             stype_encoder_dict = {
@@ -133,6 +134,8 @@ class FTTransformer(Module):
         if self.pretrain:
             num_out = self.num_decoder(x_cls)
             cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
+            # num_out = self.num_decoder(x)
+            # cat_out = [decoder(x) for decoder in self.cat_decoder]
             out = (num_out, cat_out)
         else:
             out = self.decoder(x_cls)
