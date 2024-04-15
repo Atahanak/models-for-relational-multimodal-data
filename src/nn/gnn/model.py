@@ -4,30 +4,21 @@ from torch_geometric.nn import GINEConv, BatchNorm, Linear, PNAConv
 import torch.nn.functional as F
 import torch
 
-from .config import GNNConfig
+from .decoder import LinkPredHead
 
 
 class GINe(torch.nn.Module):
-    """GIN architecture with edge features.
-    
-    .. seealso::
-
-        Hu, Weihua, et al. "Strategies for pre-training graph neural networks." *arXiv preprint arXiv:1905.12265* (2019).
-
-    Parameters
-    ----------
-    config : GNNConfig
-        Architecture configuration
-    """
-    def __init__(self, config: GNNConfig):
+    def __init__(self, num_features, num_gnn_layers, n_classes=2, 
+                n_hidden=100, edge_updates=False, residual=True, 
+                edge_dim=None, dropout=0.0, final_dropout=0.5):
         super().__init__()
-        self.n_hidden = config.n_hidden
-        self.num_gnn_layers = config.n_gnn_layers
-        self.final_dropout = config.final_dropout
-        self.n_classes = config.n_classes
+        self.n_hidden = n_hidden
+        self.num_gnn_layers = num_gnn_layers
+        self.edge_updates = edge_updates
+        self.final_dropout = final_dropout
 
-        self.node_emb = nn.Linear(config.n_node_feats, config.n_hidden)
-        self.edge_emb = nn.Linear(config.n_edge_feats, config.n_hidden)
+        self.node_emb = nn.Linear(num_features, n_hidden)
+        self.edge_emb = nn.Linear(edge_dim, n_hidden)
 
         self.convs = nn.ModuleList()
         self.emlps = nn.ModuleList()
@@ -38,24 +29,35 @@ class GINe(torch.nn.Module):
                 nn.ReLU(), 
                 nn.Linear(self.n_hidden, self.n_hidden)
                 ), edge_dim=self.n_hidden)
-            
+            if self.edge_updates: 
+                self.emlps.append(nn.Sequential(
+                    nn.Linear(3 * self.n_hidden, self.n_hidden),
+                    nn.ReLU(),
+                    nn.Linear(self.n_hidden, self.n_hidden),
+                ))
             self.convs.append(conv)
-            self.batch_norms.append(BatchNorm(self.n_hidden))
+            self.batch_norms.append(BatchNorm(n_hidden))
 
-        self.readout = LinkPredHead(config)
+        # self.decoder = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(self.final_dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
+        #                       Linear(25, n_classes))
+        self.decoder = LinkPredHead()
 
-    def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
+    def forward(self, x, edge_index, edge_attr):
+        src, dst = edge_index
+
         x = self.node_emb(x)
         edge_attr = self.edge_emb(edge_attr)
-        neg_edge_attr = self.edge_emb(neg_edge_attr)
-        pos_edge_attr = self.edge_emb(pos_edge_attr)
 
         for i in range(self.num_gnn_layers):
             x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
+            if self.edge_updates: 
+                edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
+
+        x = x[edge_index.T].reshape(-1, 2 * self.n_hidden).relu()
+        x = torch.cat((x, edge_attr.view(-1, edge_attr.shape[1])), 1)
+        out = x
         
-        out = self.readout(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-        
-        return out, x
+        return self.decoder(out)
     
     def loss_fn(self, input1, input2):
         # input 1 is pos_preds and input_2 is neg_preds
@@ -63,53 +65,51 @@ class GINe(torch.nn.Module):
     
     
 class PNA(torch.nn.Module):
-    """PNA architecture.
-    
-    .. seealso::
-
-        Corso, Gabriele, et al. "Principal neighbourhood aggregation for graph nets." *Advances in Neural Information Processing Systems* 33 (2020): 13260-13271.
-
-    Parameters
-    ----------
-    config : GNNConfig
-        Architecture configuration
-    """
-    def __init__(self, config: GNNConfig):
+    def __init__(self, num_features, num_gnn_layers, n_classes=2, 
+                n_hidden=100, edge_updates=True,
+                edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None):
         super().__init__()
-        self.n_hidden = config.n_hidden
-        self.n_hidden = int((self.n_hidden // 5) * 5)
-        self.num_gnn_layers = config.n_gnn_layers
-        self.final_dropout = config.final_dropout
-        self.n_classes = config.n_classes
-        self.deg = config.deg
-
-        self.node_emb = nn.Linear(config.n_node_feats, config.n_hidden)
-        self.edge_emb = nn.Linear(config.n_edge_feats, config.n_hidden)
+        n_hidden = int((n_hidden // 5) * 5)
+        self.n_hidden = n_hidden
+        self.num_gnn_layers = num_gnn_layers
+        self.edge_updates = edge_updates
+        self.final_dropout = final_dropout
 
         aggregators = ['mean', 'min', 'max', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
+
+        self.node_emb = nn.Linear(num_features, n_hidden)
+        self.edge_emb = nn.Linear(edge_dim, n_hidden)
 
         self.convs = nn.ModuleList()
         self.emlps = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         for _ in range(self.num_gnn_layers):
-            conv = PNAConv(in_channels=self.n_hidden, out_channels=self.n_hidden,
-                           aggregators=aggregators, scalers=scalers, deg=self.deg,
-                           edge_dim=self.n_hidden, towers=5, pre_layers=1, post_layers=1,
+            conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
+                           aggregators=aggregators, scalers=scalers, deg=deg,
+                           edge_dim=n_hidden, towers=5, pre_layers=1, post_layers=1,
                            divide_input=False)
-            
+            if self.edge_updates: self.emlps.append(nn.Sequential(
+                nn.Linear(3 * self.n_hidden, self.n_hidden),
+                nn.ReLU(),
+                nn.Linear(self.n_hidden, self.n_hidden),
+            ))
             self.convs.append(conv)
-            self.batch_norms.append(BatchNorm(self.n_hidden))
+            self.batch_norms.append(BatchNorm(n_hidden))
 
-        self.mlp = nn.Sequential(Linear(self.n_hidden*3, 50), nn.ReLU(), nn.Dropout(self.final_dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
-                              Linear(25, self.n_classes))
+        self.mlp = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(self.final_dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
+                              Linear(25, n_classes))
 
     def forward(self, x, edge_index, edge_attr):
+        src, dst = edge_index
+
         x = self.node_emb(x)
         edge_attr = self.edge_emb(edge_attr)
 
         for i in range(self.num_gnn_layers):
             x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
+            if self.edge_updates: 
+                edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
 
         x = x[edge_index.T].reshape(-1, 2 * self.n_hidden).relu()
         x = torch.cat((x, edge_attr.view(-1, edge_attr.shape[1])), 1)
@@ -119,33 +119,3 @@ class PNA(torch.nn.Module):
     def loss_fn(self, input1, input2):
         # input 1 is pos_preds and input_2 is neg_preds
         return -torch.log(input1 + 1e-15).mean() - torch.log(1 - input2 + 1e-15).mean()
-
-class LinkPredHead(torch.nn.Module):
-    """Readout head for link prediction.
-
-    Parameters
-    ----------
-    config : GNNConfig
-        Architecture configuration
-    """
-    def __init__(self, config: GNNConfig) -> None:
-        super().__init__()
-        self.n_hidden = config.n_hidden
-        self.n_classes = config.n_classes
-        self.final_dropout = config.final_dropout
-
-        self.mlp = nn.Sequential(Linear(self.n_hidden*3, self.n_hidden), nn.ReLU(), nn.Dropout(self.final_dropout), Linear(self.n_hidden, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
-                            Linear(25, self.n_classes))
-            
-    def forward(self, x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
-        # print(f'{pos_edge_index=}')
-        # print(f'{neg_edge_index=}')
-        #reshape s.t. each row in x corresponds to the concatenated src and dst node features for each edge
-        x_pos = x[pos_edge_index.T].reshape(-1, 2 * self.n_hidden).relu()
-        x_neg = x[neg_edge_index.T].reshape(-1, 2 * self.n_hidden).relu()
-
-        #concatenate the node feature vector with the corresponding edge features
-        x_pos = torch.cat((x_pos, pos_edge_attr.view(-1, pos_edge_attr.shape[1])), 1)
-        x_neg = torch.cat((x_neg, neg_edge_attr.view(-1, neg_edge_attr.shape[1])), 1)
-
-        return (torch.sigmoid(self.mlp(x_pos)), torch.sigmoid(self.mlp(x_neg)))

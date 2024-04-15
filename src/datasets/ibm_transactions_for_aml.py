@@ -28,8 +28,10 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, pretrain=False):
+        def __init__(self, root, pretrain=False, split_type='temporal', splits=[0.6, 0.2, 0.2]):
             self.root = root
+            self.split_type = split_type
+            self.splits = splits
             names = [
                 'Timestamp',
                 'From Bank',
@@ -112,16 +114,16 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 daily_inds.append(day_inds)
                 daily_trans.append(day_inds.shape[0])
             
-            #split_per = [0.6, 0.2, 0.2]\
-            split_per = [0.8, 0.2]
+            split_per = self.splits
+            #split_per = [0.8, 0.2]
             daily_totals = np.array(daily_trans)
             d_ts = daily_totals
             I = list(range(len(d_ts)))
             split_scores = dict()
             for i,j in itertools.combinations(I, 2):
                 if j >= i:
-                    #split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
-                    split_totals = [d_ts[:i].sum(), d_ts[i:].sum()]
+                    split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
+                    #split_totals = [d_ts[:i].sum(), d_ts[i:].sum()]
                     split_totals_sum = np.sum(split_totals)
                     split_props = [v/split_totals_sum for v in split_totals]
                     split_error = [abs(v-t)/t for v,t in zip(split_props, split_per)]
@@ -132,8 +134,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             i,j = min(split_scores, key=split_scores.get)
             # add split column, use 0 for train, 1 for validation, 2 for test
-            #self.df['split'] = [0] * daily_totals[:i].sum() + [1] * daily_totals[i:j].sum() + [2] * daily_totals[j:].sum()
-            self.df['split'] = [0] * daily_totals[:i].sum() + [1] * daily_totals[i:].sum()
+            self.df['split'] = [0] * daily_totals[:i].sum() + [1] * daily_totals[i:j].sum() + [2] * daily_totals[j:].sum()
+            #self.df['split'] = [0] * daily_totals[:i].sum() + [1] * daily_totals[i:].sum()
         
         # Randomly mask a column of each row and store original value and max index
         def mask_column(self, row, maskable_cols):
