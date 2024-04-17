@@ -40,7 +40,7 @@ class GINe(torch.nn.Module):
 
         # self.decoder = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(self.final_dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
         #                       Linear(25, n_classes))
-        self.decoder = LinkPredHead()
+        self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, final_dropout=final_dropout)
 
     def forward(self, x, edge_index, edge_attr):
         src, dst = edge_index
@@ -59,10 +59,15 @@ class GINe(torch.nn.Module):
         
         return self.decoder(out)
     
-    def loss_fn(self, input1, input2):
-        # input 1 is pos_preds and input_2 is neg_preds
-        return -torch.log(input1 + 1e-12).mean() - torch.log(1 - input2 + 1e-12).mean()
-    
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+            if self.edge_updates: 
+                for emlp in self.emlps:
+                    emlp.reset_parameters()
+        self.node_emb.reset_parameters()
+        self.edge_emb.reset_parameters()
+        self.decoder.reset_parameters()
     
 class PNA(torch.nn.Module):
     def __init__(self, num_features, num_gnn_layers, n_classes=2, 
