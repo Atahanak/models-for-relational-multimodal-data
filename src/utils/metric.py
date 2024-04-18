@@ -1,5 +1,5 @@
 import numpy as np
-def mrr(pos_pred, neg_pred, ks) -> (float, dict[str, float]):
+def mrr(pos_pred, neg_pred, ks, num_neg_samples) -> (float, dict[str, float]):
     """Compute mean reciprocal rank (MRR) and Hits@k for link prediction.
     
     Returns
@@ -11,7 +11,7 @@ def mrr(pos_pred, neg_pred, ks) -> (float, dict[str, float]):
     neg_pred = neg_pred.detach().clone().cpu().numpy().flatten()
 
     num_positives = len(pos_pred)
-    neg_pred_reshaped = neg_pred.reshape(num_positives, 64)
+    neg_pred_reshaped = neg_pred.reshape(num_positives, num_neg_samples)
 
     mrr_scores = []
     keys = [f'hits@{k}' for k in ks]
@@ -24,6 +24,8 @@ def mrr(pos_pred, neg_pred, ks) -> (float, dict[str, float]):
         
         # Rank predictions (argsort twice gives the ranks)
         ranks = (-combined).argsort().argsort() + 1  # Add 1 because ranks start from 1
+        # from icecream import ic
+        # ic(ranks[-1])
         for k, key in zip(ks, keys):
             if ranks[-1] <= k:
                 hits_dict[key] += 1
@@ -34,8 +36,8 @@ def mrr(pos_pred, neg_pred, ks) -> (float, dict[str, float]):
         mrr_scores.append(reciprocal_rank)
     
     # Calculate Hits@k
-    for key in keys:
-        hits_dict[key] /= count
+    # for key in keys:
+    #     hits_dict[key] /= count
 
     # Calculate Mean Reciprocal Rank
     mrr = np.mean(mrr_scores)

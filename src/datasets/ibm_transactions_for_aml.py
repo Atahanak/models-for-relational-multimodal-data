@@ -83,7 +83,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 col_to_stype['Is Laundering'] = torch_frame.categorical
                 self.target_col = 'Is Laundering'
             
-            self.temporal_balanced_split()
+            if self.split_type == 'temporal':
+                self.temporal_balanced_split()
+            else:
+                self.random_split()
+
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
         
         def random_split(self, seed=42):
@@ -131,11 +135,27 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                     split_scores[(i,j)] = score
                 else:
                     continue
-
+            
             i,j = min(split_scores, key=split_scores.get)
-            # add split column, use 0 for train, 1 for validation, 2 for test
-            self.df['split'] = [0] * daily_totals[:i].sum() + [1] * daily_totals[i:j].sum() + [2] * daily_totals[j:].sum()
-            #self.df['split'] = [0] * daily_totals[:i].sum() + [1] * daily_totals[i:].sum()
+            #split contains a list for each split (train, validation and test) and each list contains the days that are part of the respective split
+            split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
+
+            #Now, we seperate the transactions based on their indices in the timestamp array
+            split_inds = {k: [] for k in range(3)}
+            for i in range(3):
+                for day in split[i]:
+                    split_inds[i].append(daily_inds[day]) #split_inds contains a list for each split (tr,val,te) which contains the indices of each day seperately
+
+            #tr_inds = torch.cat(split_inds[0])
+            val_inds = torch.cat(split_inds[1])
+            te_inds = torch.cat(split_inds[2])
+            
+            #add a new split column to df
+            self.df['split'] = 0
+
+            # Set values for val_inds and te_inds
+            self.df.loc[val_inds, 'split'] = 1
+            self.df.loc[te_inds, 'split'] = 2
         
         # Randomly mask a column of each row and store original value and max index
         def mask_column(self, row, maskable_cols):
