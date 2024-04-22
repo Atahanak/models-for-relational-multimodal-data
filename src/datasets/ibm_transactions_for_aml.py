@@ -1,5 +1,8 @@
 import torch
 import torch_frame
+import torch_geometric
+from torch_geometric.sampler.neighbor_sampler import NeighborSampler
+from torch_geometric.sampler import EdgeSamplerInput
 import pandas as pd
 import numpy as np
 import itertools
@@ -28,10 +31,12 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, pretrain=False, split_type='temporal', splits=[0.6, 0.2, 0.2]):
+        def __init__(self, root, pretrain=None, split_type='temporal', splits=[0.6, 0.2, 0.2], num_neighbors=[100, 100]):
             self.root = root
             self.split_type = split_type
             self.splits = splits
+            self.num_neighbors = num_neighbors
+
             names = [
                 'Timestamp',
                 'From Bank',
@@ -47,9 +52,9 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             ]
             dtypes = {
                 'From Bank': 'category',
-                'From ID': 'category',
+                'From ID': 'float64',
                 'To Bank': 'category',
-                'To ID': 'category',
+                'To ID': 'float64',
                 'Amount Received': 'float64',
                 'Receiving Currency': 'category',
                 'Amount Paid': 'float64',
@@ -60,8 +65,6 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                'From ID': torch_frame.categorical,
-                'To ID': torch_frame.categorical,
                 'From Bank': torch_frame.categorical,
                 'To Bank': torch_frame.categorical,
                 'Payment Currency': torch_frame.categorical,
@@ -72,21 +75,41 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Amount Received': torch_frame.numerical
             }
 
-            if pretrain:
-                self.target_col = 'MASK'
-                maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format']
-                self.df['MASK'] = None
-                self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
-                #ic(self.df.head(5))
-                col_to_stype['MASK'] = torch_frame.mask
-            else:
-                col_to_stype['Is Laundering'] = torch_frame.categorical
-                self.target_col = 'Is Laundering'
-            
             if self.split_type == 'temporal':
                 self.temporal_balanced_split()
             else:
                 self.random_split()
+
+            self.sampler = None
+            if pretrain == 'mask':
+                self.target_col = 'MASK'
+                maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format']
+                self.df['MASK'] = None
+                self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
+                col_to_stype['MASK'] = torch_frame.mask
+            elif pretrain == 'lp':
+                #TODO: update Mapper to handle non-integer ids, e.g. strings
+                # assumes ids are integers!
+                self.df['link'] = self.df[['From ID', 'To ID']].apply(list, axis=1)
+                col_to_stype['link'] = torch_frame.relation
+                self.target_col = 'link'
+                
+                # init train and val graph
+                train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
+                #val_edges = train_edges + self.df[self.df['split'] == 1]['link'].to_numpy()
+                source = torch.tensor([int(edge[0]) for edge in train_edges], dtype=torch.long)
+                destination = torch.tensor([int(edge[1]) for edge in train_edges], dtype=torch.long)
+                num_nodes = pd.concat([self.df['From ID'], self.df['To ID']]).unique().size
+                ic(num_nodes)
+                #num_nodes = torch.unique(torch.cat([source, destination])).shape[0]
+                train_edge_index = torch.stack([source, destination], dim=0)
+                self.train_graph = torch_geometric.data.Data(num_nodes=num_nodes, edge_index=train_edge_index)
+
+                # init sampler
+                self.sampler =  NeighborSampler(self.train_graph, num_neighbors=self.num_neighbors)
+            else:
+                col_to_stype['Is Laundering'] = torch_frame.categorical
+                self.target_col = 'Is Laundering'
 
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
         
@@ -94,6 +117,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             self.df['split'] = torch_frame.utils.generate_random_split(self.df.shape[0], seed)
 
         def temporal_split(self):
+            assert 'Timestamp' in self.df.columns, \
+            '"transaction" split is only available for datasets with a "Timestamp" column'
             self.df = self.df.sort_values(by='Timestamp')
             train_size = int(self.df.shape[0] * 0.3)
             validation_size = int(self.df.shape[0] * 0.1)
@@ -164,3 +189,58 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             row['MASK'] = [original_value, col_to_mask]  # Store original value and max index in 'MASK' column
             row[col_to_mask] = np.nan  # Mask the value
             return row
+
+        def sample_neighbors(self, edges) -> (torch.Tensor, torch.Tensor):
+            """k-hop sampling.
+            
+            If k-hop sampling, this method **guarantees** that the first 
+            ``n_seed_edges`` edges in the resulting table are the seed edges in the
+            same order as given by ``idx``.
+
+            Does not support multi-graphs
+
+            Parameters
+            ----------
+            idx : int | list[int] | array
+                Edge indices to use as seed for k-hop sampling.
+            num_neighbors: int | list[int] | array
+                Number of neighbors to sample for each seed edge.
+            Returns
+            -------
+            torch.Tensor, torch.Tensor
+                Sampled edge and node data.
+            """
+            
+            source = torch.tensor([int(edge[0]) for edge in edges], dtype=torch.long)
+            destination = torch.tensor([int(edge[1]) for edge in edges], dtype=torch.long)
+            input = EdgeSamplerInput(None, source, destination)
+            out = self.sampler.sample_from_edges(input)
+            ic(out)
+            sys.exit()
+            perm = self.sampler.edge_permutation 
+            e_id = perm[out.edge] if perm is not None else out.edge
+
+            if self.sample_outgoing:
+                e_id = e_id % len(self.edge_data)
+
+            # remove repeated edges
+            e_id = e_id.unique()
+
+            # always include seed edges (without repeating)
+            seed_edges = torch.tensor(edges)
+            e_id = e_id[~torch.isin(e_id, seed_edges)]
+            e_id = torch.hstack((seed_edges, e_id))
+
+            # fill remaining rows with random rows from the dataset
+            n_sampled_edges = e_id.size(0)
+
+            # remove edges if we sample too many
+            if self.num_sampled_edges is not None and n_sampled_edges > self.num_sampled_edges:
+                e_id = e_id[:self.num_sampled_edges]
+            # This should be the same as: table = self.edge_data.iloc[e_id]
+            e_id = self.edge_data.index[e_id.numpy()]
+            edge_df = self.edge_data.loc[e_id]
+            
+            # TODO: retrieve node data
+            #node_df = self.node_data.loc[np.unique(edge_df[['SRC', 'DST']].values.ravel())]
+            return edge_df, node_df
