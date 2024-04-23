@@ -31,11 +31,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, pretrain=None, split_type='temporal', splits=[0.6, 0.2, 0.2], num_neighbors=[100, 100]):
+        def __init__(self, root, pretrain=None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
             self.root = root
             self.split_type = split_type
             self.splits = splits
-            self.num_neighbors = num_neighbors
+            self.khop_neighbors = khop_neighbors
 
             names = [
                 'Timestamp',
@@ -117,7 +117,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 ic(train_edge_index.max()+1, num_nodes)
                 x = torch.arange(num_nodes)
                 self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
-                self.sampler =  NeighborSampler(self.train_graph, num_neighbors=self.num_neighbors)
+                self.sampler =  NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
             else:
                 col_to_stype['Is Laundering'] = torch_frame.categorical
                 self.target_col = 'Is Laundering'
@@ -226,25 +226,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             col = [int(edge[1]) for edge in edges]
             idx = [int(edge[2]) for edge in edges]
 
-            #ic(len(idx), idx[:5], idx[-5:])
             input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
             out = self.sampler.sample_from_edges(input)
-            #ic(len(out.edge), out.edge[:5], out.edge[-5:])
             
             perm = self.sampler.edge_permutation 
             e_id = perm[out.edge] if perm is not None else out.edge
-            #ic(len(e_id), e_id[:5], e_id[-5:])
-            
-            #sys.exit()
-            #ic(out)
-            #ic(len(out.node))
-            #ic(len(out.row))
-            #ic(len(out.col))
-            #ic(len(out.edge))
-            #ic(out.edge[0])
-            #ic(self.df.loc[out.edge].iloc[0])
-            #ic(self.edges[out.edge[0]])
-            #sys.exit()
 
             edge_set = set()
             for id in idx:
