@@ -30,8 +30,8 @@ def main(in_path: str, out_path: str):
     # Define the format of your timestamp
     timestamp_format = "%Y/%m/%d %H:%M"
     # Convert the datetime object to Unix time (POSIX time)
-    format_fn = lambda x: int(datetime.strptime(x, timestamp_format).timestamp())
-    df['Timestamp'] = df['Timestamp'].apply(format_fn)
+    #format_fn = lambda x: int(datetime.strptime(x, timestamp_format).timestamp())
+    #df['Timestamp'] = df['Timestamp'].apply(format_fn)
 
 
     df['From Bank'] = df['From Bank'].apply(lambda b: f'B_{b}')

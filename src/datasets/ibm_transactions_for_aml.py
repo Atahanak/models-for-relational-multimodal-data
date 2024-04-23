@@ -88,24 +88,35 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
                 col_to_stype['MASK'] = torch_frame.mask
             elif pretrain == 'lp':
-                #TODO: update Mapper to handle non-integer ids, e.g. strings
-                # assumes ids are integers!
+                #TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
                 self.df['link'] = self.df[['From ID', 'To ID']].apply(list, axis=1)
                 col_to_stype['link'] = torch_frame.relation
                 self.target_col = 'link'
+                def append_index_to_link(row):
+                    row['link'].append(float(row.name))
+                    return row
+                self.df = self.df.apply(append_index_to_link, axis=1)
+                # get number of uique ids in the dataset
+                num_nodes = len(set(self.df['From ID'].to_list() + self.df['To ID'].to_list()))
+                max_id = max(self.df['From ID'].max(), self.df['To ID'].max())
+                ic(num_nodes, max_id)
+                ic(self.df.head())
                 
                 # init train and val graph
-                train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
-                #val_edges = train_edges + self.df[self.df['split'] == 1]['link'].to_numpy()
-                source = torch.tensor([int(edge[0]) for edge in train_edges], dtype=torch.long)
-                destination = torch.tensor([int(edge[1]) for edge in train_edges], dtype=torch.long)
-                num_nodes = pd.concat([self.df['From ID'], self.df['To ID']]).unique().size
-                ic(num_nodes)
-                #num_nodes = torch.unique(torch.cat([source, destination])).shape[0]
-                train_edge_index = torch.stack([source, destination], dim=0)
-                self.train_graph = torch_geometric.data.Data(num_nodes=num_nodes, edge_index=train_edge_index)
+                self.edges = self.df['link'].to_numpy()
+                self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
+                #self.train_edges = self.edges
+                ic(len(self.train_edges))
+                val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
+                ic(len(val_edges))
 
-                # init sampler
+                source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
+                destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
+                ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
+                train_edge_index = torch.stack([source, destination], dim=0)
+                ic(train_edge_index.max()+1, num_nodes)
+                x = torch.arange(num_nodes)
+                self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
                 self.sampler =  NeighborSampler(self.train_graph, num_neighbors=self.num_neighbors)
             else:
                 col_to_stype['Is Laundering'] = torch_frame.categorical
@@ -190,7 +201,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             row[col_to_mask] = np.nan  # Mask the value
             return row
 
-        def sample_neighbors(self, edges) -> (torch.Tensor, torch.Tensor):
+        def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
             """k-hop sampling.
             
             If k-hop sampling, this method **guarantees** that the first 
@@ -207,40 +218,53 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 Number of neighbors to sample for each seed edge.
             Returns
             -------
-            torch.Tensor, torch.Tensor
-                Sampled edge and node data.
+            pd.DataFrame
+                Sampled edge data
             """
             
-            source = torch.tensor([int(edge[0]) for edge in edges], dtype=torch.long)
-            destination = torch.tensor([int(edge[1]) for edge in edges], dtype=torch.long)
-            input = EdgeSamplerInput(None, source, destination)
+            row = [int(edge[0]) for edge in edges]
+            col = [int(edge[1]) for edge in edges]
+            idx = [int(edge[2]) for edge in edges]
+
+            #ic(len(idx), idx[:5], idx[-5:])
+            input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
             out = self.sampler.sample_from_edges(input)
-            ic(out)
-            sys.exit()
+            #ic(len(out.edge), out.edge[:5], out.edge[-5:])
+            
             perm = self.sampler.edge_permutation 
             e_id = perm[out.edge] if perm is not None else out.edge
-
-            if self.sample_outgoing:
-                e_id = e_id % len(self.edge_data)
-
-            # remove repeated edges
-            e_id = e_id.unique()
-
-            # always include seed edges (without repeating)
-            seed_edges = torch.tensor(edges)
-            e_id = e_id[~torch.isin(e_id, seed_edges)]
-            e_id = torch.hstack((seed_edges, e_id))
-
-            # fill remaining rows with random rows from the dataset
-            n_sampled_edges = e_id.size(0)
-
-            # remove edges if we sample too many
-            if self.num_sampled_edges is not None and n_sampled_edges > self.num_sampled_edges:
-                e_id = e_id[:self.num_sampled_edges]
-            # This should be the same as: table = self.edge_data.iloc[e_id]
-            e_id = self.edge_data.index[e_id.numpy()]
-            edge_df = self.edge_data.loc[e_id]
+            #ic(len(e_id), e_id[:5], e_id[-5:])
             
-            # TODO: retrieve node data
-            #node_df = self.node_data.loc[np.unique(edge_df[['SRC', 'DST']].values.ravel())]
-            return edge_df, node_df
+            #sys.exit()
+            #ic(out)
+            #ic(len(out.node))
+            #ic(len(out.row))
+            #ic(len(out.col))
+            #ic(len(out.edge))
+            #ic(out.edge[0])
+            #ic(self.df.loc[out.edge].iloc[0])
+            #ic(self.edges[out.edge[0]])
+            #sys.exit()
+
+            edge_set = set()
+            for id in idx:
+                edge_set.add(id)
+            for _, v in enumerate(e_id.numpy()):
+                assert self.edges[v][2] == v #sanity check
+                if v not in edge_set:
+                    row.append(self.edges[v][0])
+                    col.append(self.edges[v][1])
+                    idx.append(v)
+                # else:
+                #     #ic(v)
+                #     pass
+            khop_row = torch.tensor(row, dtype=torch.long)
+            khop_col = torch.tensor(col, dtype=torch.long)
+            #else:
+            #    idx = torch.hstack((torch.tensor(idx, dtype=torch.long), out.edge)) 
+            #    khop_row = torch.hstack((torch.tensor(row, dtype=torch.long), out.row))
+            #    khop_col = torch.hstack((torch.tensor(col, dtype=torch.long), out.col))
+
+            #ic(len(khop_row), len(khop_col), len(idx))
+            #ic(self.df.loc[out.edge].iloc[0])
+            return khop_row, khop_col, idx
