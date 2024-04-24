@@ -1,14 +1,25 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Optional, Any
 
+import torch
 from torch import Tensor
-from torch.nn import LayerNorm, Linear, Module, ReLU, Sequential, ModuleList
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn import (
+    LayerNorm, 
+    Linear,
+    Module, 
+    ReLU, 
+    Sequential, 
+    ModuleList,
+    Parameter,
+    TransformerEncoderLayer,
+)
 
 import torch_frame
 from torch_frame import TensorFrame, stype
 from torch_frame.data.stats import StatType
-from torch_frame.nn.conv import FTTransformerConvs
 from torch_frame.nn.encoder.stype_encoder import (
     EmbeddingEncoder,
     LinearEncoder,
@@ -16,7 +27,13 @@ from torch_frame.nn.encoder.stype_encoder import (
 )
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
-class FTTransformer(Module):
+from torch_geometric.nn import GINEConv
+from torch_geometric.nn import BatchNorm
+
+from ..decoder import SelfSupervisedLPHead
+from ..decoder import SupervisedHead
+
+class FTTransformerGINeFused(Module):
     r"""The FT-Transformer model introduced in the
     `"Revisiting Deep Learning Models for Tabular Data"
     <https://arxiv.org/abs/2106.11959>`_ paper.
@@ -51,23 +68,42 @@ class FTTransformer(Module):
     """
     def __init__(
         self,
+
+        # general parameters
         channels: int,
         out_channels: int,
         num_layers: int,
         col_stats: dict[str, dict[StatType, Any]],
         col_names_dict: dict[torch_frame.stype, list[str]],
         stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
+        
+        # training parameters
         pretrain: bool = False,
+        
+        # GINe parameters
+        node_dim: int = 1,
+        nhidden: int = 128,
+        edge_dim: int = None,
+        final_dropout: float = 0.5,
+
+        # fttransformer parameters
+        feedforward_channels: Optional[int] = None,
+        nhead: int = 8,
+        dropout: float = 0.2,
+        activation: str = 'relu',
     ) -> None:
         super().__init__()
         if num_layers <= 0:
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
+        
         self.pretrain = pretrain
+        self.channels = channels
+        self.nhidden = nhidden
+        
         if pretrain:
             num_numerical = len(col_names_dict[stype.numerical])
             num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
-            # num_cols = num_categorical + num_numerical
 
         if stype_encoder_dict is None:
             stype_encoder_dict = {
@@ -81,45 +117,51 @@ class FTTransformer(Module):
             col_names_dict=col_names_dict,
             stype_encoder_dict=stype_encoder_dict,
         )
-        self.backbone = FTTransformerConvs(channels=channels,
-                                           num_layers=num_layers)
+
+        # fttransformer
+        self.cls_embedding = Parameter(torch.empty(channels))
         
+        # GINe
+        self.node_emb = nn.Linear(node_dim, nhidden)
+        self.edge_emb = nn.Linear(edge_dim, nhidden)
+
+        #backbone
+        self.backbone = nn.ModuleList()
+        for _ in range(num_layers):
+            self.backbone.append(
+                FTTransformerGINeFusedLayer(
+                    channels, 
+                    nhead, 
+                    feedforward_channels, 
+                    dropout, 
+                    activation, 
+                    nhidden, 
+                    edge_dim,
+                    final_dropout
+                )
+            )
+
         if pretrain:
-            self.num_decoder = Sequential(
-                LayerNorm(channels),
-                ReLU(),
-                Linear(channels, num_numerical),
+            num_numerical = len(col_names_dict[stype.numerical])
+            num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
+            self.decoder = SelfSupervisedLPHead(
+                channels=channels, 
+                num_numerical=num_numerical, 
+                num_categorical=num_categorical, 
+                n_hidden=nhidden, 
+                dropout=final_dropout
             )
-            self.cat_decoder = ModuleList([Sequential(
-                LayerNorm(channels),
-                ReLU(),
-                Linear(channels, num_classes),
-            ) for num_classes in num_categorical])
         else:
-            self.decoder = Sequential(
-                LayerNorm(channels),
-                ReLU(),
-                Linear(channels, out_channels),
-            )
+            self.decoder = SupervisedHead(channels, out_channels)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         self.encoder.reset_parameters()
-        self.backbone.reset_parameters()
-        if self.pretrain:
-            for m in self.num_decoder:
-                if not isinstance(m, ReLU):
-                    m.reset_parameters()
-            for m in self.cat_decoder:
-                for n in m:
-                    if not isinstance(n, ReLU):
-                        n.reset_parameters()
-        else:
-            for m in self.decoder:
-                if not isinstance(m, ReLU):
-                    m.reset_parameters()
+        for layer in self.backbone:
+            layer.reset_parameters()
+        self.decoder.reset_parameters()
 
-    def forward(self, tf: TensorFrame) -> Tensor:
+    def forward(self, tf: TensorFrame, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -129,60 +171,67 @@ class FTTransformer(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
+        x_gnn = self.node_emb(x)
+        edge_attr = self.edge_emb(self.encoder(edge_attr))
+
         x, _ = self.encoder(tf)
-        x, x_cls = self.backbone(x)
-        if self.pretrain:
-            num_out = self.num_decoder(x_cls)
-            cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
-            # num_out = self.num_decoder(x)
-            # cat_out = [decoder(x) for decoder in self.cat_decoder]
-            out = (num_out, cat_out)
-        else:
-            out = self.decoder(x_cls)
+        x = self.backbone(x, edge_index, edge_attr)
+        
+        pos_edge_attr = self.edge_emb(self.encoder(pos_edge_attr))
+        neg_edge_attr = self.edge_emb(self.encoder(neg_edge_attr))
+        out = self.decoder(x)
         return out
 
-if __name__ == '__main__':
-    from icecream import ic
-    from torch_frame.datasets import Yandex
-    from torch_frame.data import DataLoader
-    import sys
+class FTTransformerGINeFusedLayer(Module):
+    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5):
+        fused_dim = channels + nhidden
 
-    dataset = Yandex(root='/tmp/yandex', name='adult')
-    ic(dataset)
-    # ic(dataset.feat_cols)
-    dataset.materialize()
-    is_classification = dataset.task_type.is_classification
+        # fttransformer
+        self.tab_conv = TransformerEncoderLayer(
+            d_model=channels,
+            nhead=nhead,
+            dim_feedforward=feedforward_channels or channels,
+            dropout=dropout,
+            activation=activation,
+            # Input and output tensors are provided as
+            # [batch_size, seq_len, channels]
+            batch_first=True,
+        )
+        self.tab_norm = LayerNorm(channels)
 
-    train_dataset, val_dataset, test_dataset = dataset.split()
-    train_tensor_frame = train_dataset.tensor_frame
-    train_loader = DataLoader(train_tensor_frame, batch_size=1, shuffle=True)
-    example = next(iter(train_loader))
-    # ic(example)
-    # ic(example.get_col_feat('C_feature_1'))
-    # ic(example.get_col_feat('N_feature_1'))
+        # GINe
+        self.gnn_conv= GINEConv(
+            nn.Sequential(
+            nn.Linear(nhidden, nhidden), 
+            nn.ReLU(), 
+            nn.Linear(nhidden, nhidden)
+        ), edge_dim=nhidden)
+        self.gnn_norm = BatchNorm(nhidden)
 
-    numerical_encoder = LinearEncoder()
-    stype_encoder_dict = {
-        stype.categorical: EmbeddingEncoder(),
-        stype.numerical: numerical_encoder
-    }
+        # fuse
+        self.fuse = nn.Sequential(
+            LayerNorm(fused_dim),
+            nn.Linear(fused_dim, fused_dim), 
+            nn.LeakyReLU(), nn.Dropout(final_dropout), 
+            nn.Linear(fused_dim, fused_dim), nn.LeakyReLU(), 
+            nn.Dropout(final_dropout),
+            nn.Linear(fused_dim, fused_dim)
+        )
+    
+    def reset_parameters(self):
+        for p in self.tab_conv.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
+        for p in self.gnn_conv.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
+        for p in self.fuse.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
-    if is_classification:
-        output_channels = dataset.num_classes
-    else:
-        output_channels = 1
-
-    model = FTTransformer(
-        channels=32,
-        out_channels=output_channels,
-        num_layers=3,
-        col_stats=dataset.col_stats,
-        col_names_dict=train_tensor_frame.col_names_dict,
-        stype_encoder_dict=stype_encoder_dict,
-        pretrain=True
-    )
-
-    pred = model(example)
-    ic(example.y)
-    ic(pred[0])
-    ic(pred[1])
+    def forward(self, x, edge_index, edge_attr):
+        x_ft = self.tab_norm(self.tab_conv(x))
+        x_gnn = (x + F.relu(self.gnn_norm(self.gnn_conv(x, edge_index, edge_attr)))) / 2
+        x = torch.cat([x_ft, x_gnn], dim=-1)
+        x = (x + self.fuse(x)) / 2
+        return x
