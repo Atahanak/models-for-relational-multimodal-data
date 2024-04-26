@@ -4,13 +4,14 @@ from typing import Optional, Any
 
 import torch
 from torch import Tensor
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import (
     LayerNorm, 
     Linear,
     Module, 
     ReLU, 
+    LeakyReLU,
+    Dropout,
     Sequential, 
     ModuleList,
     Parameter,
@@ -32,6 +33,9 @@ from torch_geometric.nn import BatchNorm
 
 from ..decoder import SelfSupervisedLPHead
 from ..decoder import SupervisedHead
+
+from icecream import ic
+import sys
 
 class FTTransformerGINeFused(Module):
     r"""The FT-Transformer model introduced in the
@@ -122,11 +126,11 @@ class FTTransformerGINeFused(Module):
         self.cls_embedding = Parameter(torch.empty(channels))
         
         # GINe
-        self.node_emb = nn.Linear(node_dim, nhidden)
-        self.edge_emb = nn.Linear(edge_dim, nhidden)
+        self.node_emb = Linear(node_dim, nhidden)
+        self.edge_emb = Linear(edge_dim, nhidden)
 
         #backbone
-        self.backbone = nn.ModuleList()
+        self.backbone = ModuleList()
         for _ in range(num_layers):
             self.backbone.append(
                 FTTransformerGINeFusedLayer(
@@ -171,15 +175,21 @@ class FTTransformerGINeFused(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
+        B, _, _ = tf.shape
         x_gnn = self.node_emb(x)
         edge_attr = self.edge_emb(self.encoder(edge_attr))
 
-        x, _ = self.encoder(tf)
-        x = self.backbone(x, edge_index, edge_attr)
+        x_tab, _ = self.encoder(tf)
+        x_cls = self.cls_embedding.repeat(B, 1, 1)
+        x_tab = torch.cat([x_cls, x], dim=1)
+        x = self.backbone(x_tab, x_gnn, edge_index, edge_attr)
         
         pos_edge_attr = self.edge_emb(self.encoder(pos_edge_attr))
         neg_edge_attr = self.edge_emb(self.encoder(neg_edge_attr))
-        out = self.decoder(x)
+        if self.pretrain:
+            out = self.decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+        else:
+            out = self.decoder(x)
         return out
 
 class FTTransformerGINeFusedLayer(Module):
@@ -201,21 +211,21 @@ class FTTransformerGINeFusedLayer(Module):
 
         # GINe
         self.gnn_conv= GINEConv(
-            nn.Sequential(
-            nn.Linear(nhidden, nhidden), 
-            nn.ReLU(), 
-            nn.Linear(nhidden, nhidden)
+            Sequential(
+            Linear(nhidden, nhidden), 
+            ReLU(), 
+            Linear(nhidden, nhidden)
         ), edge_dim=nhidden)
         self.gnn_norm = BatchNorm(nhidden)
 
         # fuse
-        self.fuse = nn.Sequential(
+        self.fuse = Sequential(
             LayerNorm(fused_dim),
-            nn.Linear(fused_dim, fused_dim), 
-            nn.LeakyReLU(), nn.Dropout(final_dropout), 
-            nn.Linear(fused_dim, fused_dim), nn.LeakyReLU(), 
-            nn.Dropout(final_dropout),
-            nn.Linear(fused_dim, fused_dim)
+            Linear(fused_dim, fused_dim), 
+            LeakyReLU(), Dropout(final_dropout), 
+            Linear(fused_dim, fused_dim), LeakyReLU(), 
+            Dropout(final_dropout),
+            Linear(fused_dim, fused_dim)
         )
     
     def reset_parameters(self):
@@ -229,9 +239,13 @@ class FTTransformerGINeFusedLayer(Module):
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
 
-    def forward(self, x, edge_index, edge_attr):
-        x_ft = self.tab_norm(self.tab_conv(x))
-        x_gnn = (x + F.relu(self.gnn_norm(self.gnn_conv(x, edge_index, edge_attr)))) / 2
-        x = torch.cat([x_ft, x_gnn], dim=-1)
-        x = (x + self.fuse(x)) / 2
-        return x
+    def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+        ic(x_tab.shape, x_gnn.shape, edge_index.shape, edge_attr.shape)
+        sys.exit()
+        # x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+        # x_tab = self.tab_norm(self.tab_conv(x_tab))
+        # x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
+        # x_gnn_seed, x_gnn_neigh = x_gnn[:, , :], x_gnn[:, 1:, :]
+        # x = torch.cat([x_tab, x_gnn], dim=-1)
+        # x = (x + self.fuse(x)) / 2
+        return x[:, x_tab.shape[1], x_tab.shape[2]], x[:, x_gnn.shape[1], x_gnn.shape[2]], edge_index, edge_attr
