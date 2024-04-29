@@ -5,19 +5,15 @@
 Install the conda environment:
 ```
 conda env create -f env.yml
+conda activate rel-mm
 conda develop ./src/
-conda develop ./pytorch_frame/
+conda develop ./pytorch-frame/
 pip install pyg-lib -f https://data.pyg.org/whl/torch-2.0.0%2Bcu118.html
 ```
 
 Init submodules:
 ```
 git submodule update --init pytorch-frame
-```
-
-Activate the environment:
-```
-conda activate rel-mm
 ```
 
 Finally, if you havent already create a wandb account from the following link https://docs.wandb.ai/quickstart.

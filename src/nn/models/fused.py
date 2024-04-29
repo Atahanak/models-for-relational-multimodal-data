@@ -25,6 +25,7 @@ from torch_frame.nn.encoder.stype_encoder import (
     EmbeddingEncoder,
     LinearEncoder,
     StypeEncoder,
+    TimestampEncoder
 )
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
@@ -113,6 +114,7 @@ class FTTransformerGINeFused(Module):
             stype_encoder_dict = {
                 stype.categorical: EmbeddingEncoder(),
                 stype.numerical: LinearEncoder(),
+                stype.timestamp: TimestampEncoder()
             }
 
         self.encoder = StypeWiseFeatureEncoder(
@@ -139,8 +141,7 @@ class FTTransformerGINeFused(Module):
                     feedforward_channels, 
                     dropout, 
                     activation, 
-                    nhidden, 
-                    edge_dim,
+                    nhidden,
                     final_dropout
                 )
             )
@@ -152,7 +153,7 @@ class FTTransformerGINeFused(Module):
                 channels=channels, 
                 num_numerical=num_numerical, 
                 num_categorical=num_categorical, 
-                n_hidden=nhidden, 
+                nhidden=nhidden, 
                 dropout=final_dropout
             )
         else:
@@ -160,6 +161,9 @@ class FTTransformerGINeFused(Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
+        torch.nn.init.normal_(self.cls_embedding, std=0.01)
+        self.node_emb.reset_parameters()
+        self.edge_emb.reset_parameters()
         self.encoder.reset_parameters()
         for layer in self.backbone:
             layer.reset_parameters()
@@ -175,25 +179,48 @@ class FTTransformerGINeFused(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
-        B, _, _ = tf.shape
+        B = tf.num_rows
         x_gnn = self.node_emb(x)
-        edge_attr = self.edge_emb(self.encoder(edge_attr))
+        #ic(x_gnn.shape)
+        #edge_attr = self.edge_emb(self.encoder(edge_attr))
+        edge_attr = self.edge_emb(edge_attr)
+        #ic(edge_attr.shape)
 
         x_tab, _ = self.encoder(tf)
+        #ic(x_tab.shape)
         x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, x], dim=1)
-        x = self.backbone(x_tab, x_gnn, edge_index, edge_attr)
-        
-        pos_edge_attr = self.edge_emb(self.encoder(pos_edge_attr))
-        neg_edge_attr = self.edge_emb(self.encoder(neg_edge_attr))
+        # ic(x_cls[0])
+        #ic(x_cls.shape)
+        x_tab = torch.cat([x_cls, x_tab], dim=1)
+        #ic(x_tab.shape)
+
+        for fused_layer in self.backbone:
+            # ic(x_tab[0, 0, :], x_gnn[0, :])
+            # ic(x_tab[1, 0, :])
+            # ic(x_tab[0, 1, :])
+            # ic(x_tab[0, 2, :])
+            x_tab, x_gnn = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
+            #ic(x_tab.shape, x_gnn.shape)
+
+        # ic(x_tab.shape, x_gnn.shape)
+        # ic(x_tab[0, 0, :], x_gnn[0, :])
+        # sys.exit()
+        #pos_edge_attr = self.edge_emb(self.encoder(pos_edge_attr))
+        pos_edge_attr = self.edge_emb(pos_edge_attr)
+        #ic(pos_edge_attr.shape)
+        #neg_edge_attr = self.edge_emb(self.encoder(neg_edge_attr))
+        neg_edge_attr = self.edge_emb(neg_edge_attr)
+        #ic(neg_edge_attr.shape)
         if self.pretrain:
-            out = self.decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            out = self.decoder(x_tab, x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
         else:
             out = self.decoder(x)
         return out
 
 class FTTransformerGINeFusedLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5):
+        super().__init__()
+        self.channels = channels
         fused_dim = channels + nhidden
 
         # fttransformer
@@ -227,25 +254,51 @@ class FTTransformerGINeFusedLayer(Module):
             Dropout(final_dropout),
             Linear(fused_dim, fused_dim)
         )
+        self.reset_parameters()
     
     def reset_parameters(self):
         for p in self.tab_conv.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
-        for p in self.gnn_conv.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
+        self.tab_norm.reset_parameters()
+        # for p in self.gnn_conv.parameters():
+        #     if p.dim() > 1:
+        #         torch.nn.init.xavier_uniform_(p)
+        self.gnn_conv.reset_parameters()
+        self.gnn_norm.reset_parameters()
         for p in self.fuse.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr):
-        ic(x_tab.shape, x_gnn.shape, edge_index.shape, edge_attr.shape)
-        sys.exit()
-        # x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
-        # x_tab = self.tab_norm(self.tab_conv(x_tab))
-        # x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-        # x_gnn_seed, x_gnn_neigh = x_gnn[:, , :], x_gnn[:, 1:, :]
-        # x = torch.cat([x_tab, x_gnn], dim=-1)
-        # x = (x + self.fuse(x)) / 2
-        return x[:, x_tab.shape[1], x_tab.shape[2]], x[:, x_gnn.shape[1], x_gnn.shape[2]], edge_index, edge_attr
+        #ic(x_tab.shape, x_gnn.shape, edge_index.shape, edge_attr.shape)
+        x_tab = self.tab_norm(self.tab_conv(x_tab))
+        #ic(x_tab.shape)
+
+        x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+        x_tab_cls_m = torch.mean(x_tab[:, 0, :], dim=0).unsqueeze(0).flatten()
+        #ic(x_tab_cls.shape)
+
+        # check if x_gnn, edge_index and edge_attr has any NaN values
+        # ic(torch.isnan(x_gnn).any() or torch.isnan(edge_index).any() or torch.isnan(edge_attr).any())
+        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
+        # ic(torch.isnan(x_gnn).any())
+        #ic(x_gnn.shape)
+        
+        #x_gnn_seed, x_gnn_neigh = x_gnn[:x_tab.shape[0], :], x_gnn[x_tab.shape[0]:, :]
+        #ic(x_gnn_seed.shape, x_gnn_neigh.shape)
+        x_gnn_int, x_gnn = x_gnn[0, :], x_gnn[1:, :] 
+        #ic(x_gnn_int.shape)
+
+        x = torch.cat([x_tab_cls_m, x_gnn_int], dim=-1)
+        #ic(x.shape)
+
+        x = (x + self.fuse(x)) / 2
+        #ic(x.shape)
+        
+        # ic(x[:self.channels].shape, x_tab_cls.shape, x_tab.shape, x_gnn_int.shape, x[self.channels:].shape, x_gnn.shape)
+        x_tab = torch.cat([(x[:self.channels].unsqueeze(0) + x_tab_cls / 2).unsqueeze(1), x_tab], dim=1) 
+        #ic(x_tab.shape)
+        x_gnn = torch.cat([(x_gnn_int + x[self.channels:] / 2).unsqueeze(0), x_gnn])
+        #ic(x_gnn.shape)
+        return x_tab, x_gnn

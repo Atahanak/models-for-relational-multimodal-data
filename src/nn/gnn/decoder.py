@@ -23,6 +23,12 @@ class LinkPredHead(torch.nn.Module):
             nn.Dropout(self.final_dropout),
             Linear(25, self.n_classes)
         )
+        self.reset_parameters()
+    
+    def reset_parameters(self) -> None:
+        for p in self.mlp.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
             
     def forward(self, x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
         #reshape s.t. each row in x corresponds to the concatenated src and dst node features for each edge
