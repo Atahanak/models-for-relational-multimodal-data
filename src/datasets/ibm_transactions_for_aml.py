@@ -82,9 +82,9 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             if 'mask' in pretrain: # mask a column of each row
                 maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format']
-                self.df['MASK'] = None
+                self.df['mask'] = None
                 self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
-                col_to_stype['MASK'] = torch_frame.mask
+                col_to_stype['mask'] = torch_frame.mask
             
             self.sampler = None
             if 'lp' in pretrain: # initialize training graph and neighbor sampler
@@ -116,10 +116,18 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             if pretrain == 'lp':
                 self.target_col = 'link'
             elif pretrain == 'mask':
-                self.target_col = 'MASK'
+                self.target_col = 'mask'
             elif pretrain == 'lp+mask' or pretrain == 'mask+lp':
-                # merge link and mask columns
-                pass
+                # merge link and mask columns into a column called target
+                self.df['target'] = self.df['mask'] + self.df['link']
+                col_to_stype['target'] = torch_frame.mask
+                self.target_col = 'target'
+                ic(self.df['link'][0:5])
+                ic(self.df['mask'][0:5])
+                ic(self.df['target'][0:5])
+                self.df = self.df.drop(columns=['link', 'mask'])
+                del col_to_stype['link']
+                del col_to_stype['mask']
             else:
                 col_to_stype['Is Laundering'] = torch_frame.categorical
                 self.target_col = 'Is Laundering'
@@ -199,7 +207,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
         def mask_column(self, row, maskable_cols):
             col_to_mask = np.random.choice(maskable_cols)  # Choose a column randomly
             original_value = row[col_to_mask]
-            row['MASK'] = [original_value, col_to_mask]  # Store original value and max index in 'MASK' column
+            row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
             row[col_to_mask] = np.nan  # Mask the value
             return row
 

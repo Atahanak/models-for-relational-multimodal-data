@@ -212,7 +212,7 @@ class FTTransformerGINeFused(Module):
         neg_edge_attr = self.edge_emb(neg_edge_attr)
         #ic(neg_edge_attr.shape)
         if self.pretrain:
-            out = self.decoder(x_tab, x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            out = self.decoder(x_tab[:, 0, :], x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
         else:
             out = self.decoder(x)
         return out
