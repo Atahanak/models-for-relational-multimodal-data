@@ -43,7 +43,6 @@ class GINe(torch.nn.Module):
         self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, final_dropout=final_dropout)
 
     def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
-        # src, dst = edge_index
 
         x = self.node_emb(x)
         edge_attr = self.edge_emb(edge_attr)
@@ -53,6 +52,7 @@ class GINe(torch.nn.Module):
         for i in range(self.num_gnn_layers):
             x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
             if self.edge_updates: 
+                src, dst = edge_index
                 edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
 
         #x = x[edge_index.T].reshape(-1, 2 * self.n_hidden).relu()

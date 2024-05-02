@@ -80,44 +80,54 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             else:
                 self.random_split()
 
-            self.sampler = None
-            if pretrain == 'mask':
-                self.target_col = 'MASK'
+            if 'mask' in pretrain: # mask a column of each row
                 maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format']
-                self.df['MASK'] = None
+                self.df['mask'] = None
                 self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
-                col_to_stype['MASK'] = torch_frame.mask
-            elif pretrain == 'lp':
+                col_to_stype['mask'] = torch_frame.mask
+            
+            self.sampler = None
+            if 'lp' in pretrain: # initialize training graph and neighbor sampler
                 #TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
                 self.df['link'] = self.df[['From ID', 'To ID']].apply(list, axis=1)
                 col_to_stype['link'] = torch_frame.relation
-                self.target_col = 'link'
                 def append_index_to_link(row):
                     row['link'].append(float(row.name))
                     return row
                 self.df = self.df.apply(append_index_to_link, axis=1)
+                
                 # get number of uique ids in the dataset
                 num_nodes = len(set(self.df['From ID'].to_list() + self.df['To ID'].to_list()))
-                max_id = max(self.df['From ID'].max(), self.df['To ID'].max())
-                ic(num_nodes, max_id)
-                ic(self.df.head())
                 
                 # init train and val graph
                 self.edges = self.df['link'].to_numpy()
                 self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
                 #self.train_edges = self.edges
-                ic(len(self.train_edges))
-                val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
-                ic(len(val_edges))
+                #val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
 
                 source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
                 destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
                 ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
                 train_edge_index = torch.stack([source, destination], dim=0)
-                ic(train_edge_index.max()+1, num_nodes)
                 x = torch.arange(num_nodes)
                 self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
                 self.sampler =  NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+            
+            if pretrain == 'lp':
+                self.target_col = 'link'
+            elif pretrain == 'mask':
+                self.target_col = 'mask'
+            elif pretrain == 'lp+mask' or pretrain == 'mask+lp':
+                # merge link and mask columns into a column called target
+                self.df['target'] = self.df['mask'] + self.df['link']
+                col_to_stype['target'] = torch_frame.mask
+                self.target_col = 'target'
+                ic(self.df['link'][0:5])
+                ic(self.df['mask'][0:5])
+                ic(self.df['target'][0:5])
+                self.df = self.df.drop(columns=['link', 'mask'])
+                del col_to_stype['link']
+                del col_to_stype['mask']
             else:
                 col_to_stype['Is Laundering'] = torch_frame.categorical
                 self.target_col = 'Is Laundering'
@@ -197,8 +207,14 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
         def mask_column(self, row, maskable_cols):
             col_to_mask = np.random.choice(maskable_cols)  # Choose a column randomly
             original_value = row[col_to_mask]
-            row['MASK'] = [original_value, col_to_mask]  # Store original value and max index in 'MASK' column
-            row[col_to_mask] = np.nan  # Mask the value
+            row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
+
+            #row[col_to_mask] = np.nan
+            # hack to escape nan error in torch_frame
+            if col_to_mask in ['Amount Received', 'Amount Paid']:
+                row[col_to_mask] = -1
+            else:
+                row[col_to_mask] = '[MASK]'
             return row
 
         def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
