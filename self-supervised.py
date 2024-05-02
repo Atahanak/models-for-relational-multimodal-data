@@ -60,9 +60,9 @@ run = wandb.init(
 # %%
 from src.datasets import IBMTransactionsAML
 #dataset = IBMTransactionsAML(root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy.csv', pretrain=pretrain)
-dataset = IBMTransactionsAML(root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', pretrain=pretrain, split_type='temporal', splits=data_split)
+dataset = IBMTransactionsAML(root='/scratch/cgriu/AML_dataset_processed/HI-Small_Trans-c.csv', pretrain=pretrain, split_type='temporal', splits=data_split)
 ic(dataset)
-dataset./home/takyildiz/dev/cse3000/src/utilsmaterialize()
+dataset.materialize()
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 dataset.df.head(5)
