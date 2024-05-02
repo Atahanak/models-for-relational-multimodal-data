@@ -208,7 +208,13 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             col_to_mask = np.random.choice(maskable_cols)  # Choose a column randomly
             original_value = row[col_to_mask]
             row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
-            row[col_to_mask] = np.nan  # Mask the value
+
+            #row[col_to_mask] = np.nan
+            # hack to escape nan error in torch_frame
+            if col_to_mask in ['Amount Received', 'Amount Paid']:
+                row[col_to_mask] = -1
+            else:
+                row[col_to_mask] = '[MASK]'
             return row
 
         def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
