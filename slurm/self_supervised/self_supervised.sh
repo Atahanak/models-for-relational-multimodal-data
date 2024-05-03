@@ -13,7 +13,6 @@
 previous=$(nvidia-smi --query-accounted-apps='gpu_utilization,mem_utilization,max_memory_usage,time' --format='csv' | /usr/bin/tail -n '+2')
 nvidia-smi
 
-module load 2023r1
 module load miniconda3
 
 unset CONDA_SHLVL
