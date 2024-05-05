@@ -234,7 +234,7 @@ def train(epoc: int, model, optimizer) -> float:
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
             del pred
             del tf
-        wandb.log({"train_loss": loss_accum/total_count})
+            wandb.log({"train_loss": loss_accum/total_count})
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
@@ -268,6 +268,9 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 hits5=f'{np.mean(hits5):.4f}',
                 hits10=f'{np.mean(hits10):.4f}'
             )
+            wandb.log({
+                f"{dataset_name}_loss": loss_accum/total_count,
+            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
@@ -303,7 +306,7 @@ optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
-# train_metric = test(train_loader, model, "train")
+# train_metric = test(train_loader, model, "tr")
 # val_metric = test(val_loader, model, "val")
 # test_metric = test(test_loader, model, "test")
 # ic(
@@ -314,7 +317,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
 for epoch in range(1, epochs + 1):
     train_loss = train(epoch, model, optimizer)
-    train_metric = test(train_loader, model, "train")
+    train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
     test_metric = test(test_loader, model, "test")
     ic(

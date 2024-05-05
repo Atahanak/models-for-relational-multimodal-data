@@ -85,7 +85,7 @@ wandb.login()
 run = wandb.init(
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm", 
-    name=f"model=FTTransformerGINeFusedEdgeUpdates,dataset=IBM-AML_Hi_Sm,objective=lp+mask,khop_neighs=[100,100],channels={channels},epoch=3,nointnode",
+    name=f"model=FTTransformerGINeFusedNodeUpdates,dataset=IBM-AML_Hi_Sm,objective=lp+mask,khop_neighs=[100,100],channels={channels},epoch=1",
     #name=f"debug-fused",
     config=args
 )
@@ -444,6 +444,12 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             del cat_pred
             del edge_index
             del edge_attr
+            wandb.log({
+                f"{dataset_name}_loss": loss_accum/total_count,
+                f"{dataset_name}_loss_c": loss_c_accum/t_c,
+                f"{dataset_name}_loss_n": loss_n_accum/t_n,
+                f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
@@ -452,7 +458,6 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
-            f"{dataset_name}_loss": loss_accum/total_count,
             f"{dataset_name}_mrr": mrr_score,
             f"{dataset_name}_hits@1": hits1,
             f"{dataset_name}_hits@2": hits2,
@@ -460,9 +465,6 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             f"{dataset_name}_hits@10": hits10,
             f"{dataset_name}_accuracy": accuracy,
             f"{dataset_name}_rmse": rmse,
-            f"{dataset_name}_loss_c": loss_c_accum/t_c,
-            f"{dataset_name}_loss_n": loss_n_accum/t_n,
-            f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
@@ -493,11 +495,11 @@ optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
-# train_metric = test(train_loader, model, "train")
+# train_metric = test(train_loader, model, "tr")
 # val_metric = test(val_loader, model, "val")
 # test_metric = test(test_loader, model, "test")
 # ic(
-#         train_metric, 
+#         train_metric,
 #         val_metric, 
 #         test_metric
 # )
