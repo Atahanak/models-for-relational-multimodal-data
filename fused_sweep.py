@@ -1,4 +1,3 @@
-# %%
 import os
 import numpy as np
 import random
@@ -32,12 +31,11 @@ import sys
 
 torch.set_float32_matmul_precision('high')
 
-# %%
 seed = 42
 batch_size = 200
 lr = 5e-4
 eps = 1e-8
-epochs = 3
+epochs = 1
 
 compile = False
 data_split = [0.6, 0.2, 0.2]
@@ -47,103 +45,121 @@ khop_neighbors = [100, 100]
 pos_sample_prob = 0.15
 num_neg_samples = 64
 channels = 128
+num_layers = 3
+dropout = 0.5
 
 pretrain = 'mask+lp'
 #pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-args = {
-    'testing': False,
-    'batch_size': batch_size,
-    'seed': seed,
-    'device': device,
-    'lr': lr,
-    'eps': eps,
-    'epochs': epochs,
-    'compile': compile,
-    'data_split': data_split,
-    'pos_sample_prob': pos_sample_prob,
-    'channels': channels,
-    'split_type': split_type,
-    'num_neg_samples': num_neg_samples,
-    'pretrain': pretrain,
-    'khop_neighbors': khop_neighbors,
-}
 
-# %%
+wandb.login()
+sweep_config = {
+    'method': 'random',
+    #'method': 'bayes',
+    #'early_terminate': {
+    #    'type': 'hyperband',
+    #    'min_iter': 3
+    #},
+}
+metric = {
+    'name': 'val_loss',
+    'goal': 'minimize'
+}
+sweep_config['metric'] = metric
+parameters_dict = {
+    'lr': {
+        #'values': [1e-4, 5e-4, 1e-3]
+        'distribution': 'uniform',
+        'min': 0,
+        'max': 3e-4
+    },
+    'dropout': {
+        'values': [0.3, 0.5, 0.7]
+    },
+    'channels': {
+        'values': [16, 32, 64]
+    },
+}
+parameters_dict.update({
+    'batch_size': {
+        'value': 200
+    },
+    'dropout': {
+        'value': 0.5
+    },
+    'epochs': {
+        'value': 1
+    },
+    'eps': {
+        'value': 1e-8
+    },
+    'pos_sample_prob': {
+        'value': 1
+    },
+    'num_neg_samples': {
+        'value': 64
+    },
+    'pretrain': {
+        'value': 'lp'
+    },
+    'khop_neighbors': {
+        'value': [100, 100]
+    },
+    'split_type': {
+        'value': 'temporal'
+    },
+    'data_split': {
+        'value': [0.6, 0.2, 0.2]
+    },
+    'num_layers': {
+        'value': 3
+    },
+})
+sweep_config['parameters'] = parameters_dict
+ic(sweep_config)
+sweep_id = wandb.sweep(sweep_config, project='rel-mm')
+
 np.random.seed(seed)
 random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
-# When running on the CuDNN backend, two further options must be set
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
-# Set a fixed value for the hash seed
 os.environ["PYTHONHASHSEED"] = str(seed)
 
-# %%
-wandb.login()
-run = wandb.init(
-    mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm", 
-    name=f"model=FTTransformerGINeFusedNodeUpdates,dataset=IBM-AML_Hi_Sm,objective={pretrain},khop_neighs=[100,100],channels={channels},epoch=1",
-    #name=f"debug-fused",
-    config=args
-)
+def build_loaders(config):
+    dataset = IBMTransactionsAML(
+        root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+        #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+        pretrain=config.pretrain, 
+        split_type=config.split_type, 
+        splits=config.data_split, 
+        khop_neighbors=config.khop_neighbors
+    )
+    ic(dataset)
+    dataset.materialize()
+    dataset.df.head(5)
+    train_dataset, val_dataset, test_dataset = dataset.split()
+    ic(len(train_dataset), len(val_dataset), len(test_dataset))
 
-# %%
-dataset = IBMTransactionsAML(
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    pretrain=pretrain, 
-    split_type=split_type, 
-    splits=data_split, 
-    khop_neighbors=khop_neighbors
-)
-ic(dataset)
-dataset.materialize()
-dataset.df.head(5)
-train_dataset, val_dataset, test_dataset = dataset.split()
-ic(len(train_dataset), len(val_dataset), len(test_dataset))
+    def seed_worker(worker_id):
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        
+    g = torch.Generator()
+    g.manual_seed(seed)
+    train_tensor_frame = train_dataset.tensor_frame
+    train_loader = DataLoader(train_tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
+    val_tensor_frame = val_dataset.tensor_frame
+    val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+    test_tensor_frame = test_dataset.tensor_frame
+    test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+    return dataset, train_loader, val_loader, test_loader
 
-# %%
-def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    
-g = torch.Generator()
-g.manual_seed(seed)
-tensor_frame = dataset.tensor_frame
-train_tensor_frame = train_dataset.tensor_frame
-train_loader = DataLoader(train_tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
-val_tensor_frame = val_dataset.tensor_frame
-val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
-test_tensor_frame = test_dataset.tensor_frame
-test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
-
-# %%
-num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
-num_columns = num_numerical + num_categorical
-ic(num_numerical, num_categorical, num_columns)
-
-# %%
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(na_strategy=NAStrategy.OLDEST_TIMESTAMP),
-}
-encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=dataset.col_stats,
-            col_names_dict=train_tensor_frame.col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-)
-
-# %%
 def create_empty_rows(col_names_dict, num_rows):
     feat_dict = {}
     for stype, col_names in col_names_dict.items():
@@ -250,14 +266,16 @@ def inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
     neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
     return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
 
-def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
+def lp_inputs(tf: TensorFrame, dataset, encoder, config, train=True):
     
+    num_neg_samples = config.num_neg_samples
+    pos_sample_prob = config.pos_sample_prob
     edges = tf.y[:, 2:]
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
     #del edges
 
-    edge_data = tensor_frame.__getitem__(idx)
+    edge_data = dataset.tensor_frame.__getitem__(idx)
     edge_attr, col_names = encoder(edge_data)
     edge_attr = edge_attr.view(-1, len(col_names) * channels)
 
@@ -331,8 +349,7 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
     neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
     return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
 
-# %%
-def calc_loss(cat_pred, num_pred, y):
+def calc_loss(cat_pred, num_pred, y, num_numerical):
     accum_n = accum_c = t_n = t_c = 0
     for i, ans in enumerate(y):
         # ans --> [val, idx]
@@ -346,18 +363,19 @@ def calc_loss(cat_pred, num_pred, y):
             accum_n += torch.square(num_pred[i][int(ans[1])] - ans[0]) #mse
     return (accum_n / t_n) + torch.sqrt(accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
 
-def train(epoc: int, model, optimizer) -> float:
+def train(epoc: int, train_loader, dataset, encoder, model, optimizer, config) -> float:
     model.train()
     loss_accum = total_count = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
+    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
+            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, dataset, encoder)
             tf = tf.to(device)
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = lp_loss(pos_pred, neg_pred)
-            t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y)
+            t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y, num_numerical)
             loss = link_loss + t_loss
             optimizer.zero_grad()
             loss.backward()
@@ -384,7 +402,7 @@ def train(epoc: int, model, optimizer) -> float:
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
-def test(loader: DataLoader, model, dataset_name) -> float:
+def test(loader: DataLoader, dataset, encoder, model, dataset_name, config) -> float:
     model.eval()
     mrrs = []
     hits1 = []
@@ -396,13 +414,14 @@ def test(loader: DataLoader, model, dataset_name) -> float:
     accum_acc = accum_l2 = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
     t_n = t_c = 0
+    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False)
+            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, dataset, encoder, config, train=False)
             tf = tf.to(device)
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = lp_loss(pos_pred, neg_pred)
-            t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y)
+            t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y, num_numerical)
             loss = link_loss + t_loss
             
             t_c += loss_c[1]
@@ -469,55 +488,60 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
-# %%
-torch.autograd.set_detect_anomaly(False)
-model = FTTransformerGINeFused(
-    channels=channels,
-    out_channels=None,
-    col_stats=dataset.col_stats,
-    col_names_dict=train_tensor_frame.col_names_dict,
-    edge_dim=channels*train_dataset.tensor_frame.num_cols,
-    num_layers=3, 
-    dropout=0.5,
-    pretrain=True
-)
-model = torch.compile(model, dynamic=True) if compile else model
-model.to(device)
-learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-ic(learnable_params)
-wandb.log({"learnable_params": learnable_params})
-
-no_decay = ['bias', 'LayerNorm.weight']
-optimizer_grouped_parameters = [
-    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
-    {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
-optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
-scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-
-# train_metric = test(train_loader, model, "tr")
-# val_metric = test(val_loader, model, "val")
-# test_metric = test(test_loader, model, "test")
-# ic(
-#         train_metric,
-#         val_metric, 
-#         test_metric
-# )
-
-for epoch in range(1, epochs + 1):
-    train_loss = train(epoch, model, optimizer)
-    train_metric = test(train_loader, model, "tr")
-    val_metric = test(val_loader, model, "val")
-    test_metric = test(test_loader, model, "test")
-    ic(
-        train_loss, 
-        train_metric, 
-        val_metric, 
-        test_metric
+def build_model(dataset, config):
+    model = FTTransformerGINeFused(
+        channels=config.channels,
+        nhidden=config.channels,
+        out_channels=None,
+        col_stats=dataset.col_stats,
+        col_names_dict=dataset.tensor_frame.col_names_dict,
+        edge_dim=config.channels*dataset.tensor_frame.num_cols,
+        num_layers=config.num_layers, 
+        dropout=config.dropout,
+        pretrain=True
     )
+    model = torch.compile(model, dynamic=True) if compile else model
+    learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    ic(learnable_params)
+    wandb.log({"learnable_params": learnable_params})
+    return model.to(device)
 
-# %%
+def build_optimizer(model, config):
+    no_decay = ['bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=config.lr, eps=config.eps)
+    #scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=1e-4, max_lr=1e-3, step_size_up=2000, cycle_momentum=False)
+    return optimizer
+
+def run(config=None):
+    with wandb.init(config=config, dir='/tmp/'):
+        config = wandb.config
+        dataset, train_loader, val_loader, _ = build_loaders(config)
+        model = build_model(dataset, config)
+        optimizer = build_optimizer(model, config)
+        stype_encoder_dict = {
+            stype.categorical: EmbeddingEncoder(),
+            stype.numerical: LinearEncoder(),
+            stype.timestamp: TimestampEncoder(na_strategy=NAStrategy.OLDEST_TIMESTAMP),
+        }
+        encoder = StypeWiseFeatureEncoder(
+                    out_channels=channels,
+                    col_stats=dataset.col_stats,
+                    col_names_dict=dataset.tensor_frame.col_names_dict,
+                    stype_encoder_dict=stype_encoder_dict,
+        )
+        for epoch in range(1, epochs + 1):
+            train_loss = train(epoch, train_loader, dataset, encoder, model, optimizer)
+            val_metric = test(val_loader, dataset, encoder, model, "val")
+            ic(
+                train_loss, 
+                val_metric, 
+            )
+
+wandb.agent(sweep_id, run, count=15)
 wandb.finish()
 
 

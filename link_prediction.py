@@ -42,7 +42,7 @@ data_split = [0.6, 0.2, 0.2]
 split_type = 'temporal'
 
 khop_neighbors = [100, 100]
-pos_sample_prob = 0.15
+pos_sample_prob = 1
 num_neg_samples = 64
 channels = 128
 
@@ -50,7 +50,7 @@ pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
-    'testing': True,
+    'testing': False,
     'batch_size': batch_size,
     'seed': seed,
     'device': device,
@@ -81,17 +81,18 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 # %%
 wandb.login()
 run = wandb.init(
+    dir="/mnt/data/wandb",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm", 
-    #name="model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,khop_neighs=[100,100],channels=32,epoch=3",
-    name="debug-temporal-LOL-channels256-LOL",
+    #name=f"model=FTTransformerGINeFused-NodeUpdates,dataset=IBM-AML_Hi_Sm,objective=lp,neg_samples={num_neg_samples},channels={channels},pos_prob={pos_sample_prob}",
+    name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,neg_samples={num_neg_samples},channels={channels},pos_prob={pos_sample_prob}",
     config=args
 )
 
 # %%
 dataset = IBMTransactionsAML(
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain=pretrain, 
     split_type=split_type, 
     splits=data_split, 
@@ -223,8 +224,10 @@ def train(epoc: int, model, optimizer) -> float:
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
+            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob=pos_sample_prob)
             pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            #tf = tf.to(device)
+            #_, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             loss = lp_loss(pred, neg_pred)
             optimizer.zero_grad()
             loss.backward()
@@ -249,8 +252,10 @@ def test(loader: DataLoader, model, dataset_name) -> float:
     total_count = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False)
+            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False, pos_sample_prob=pos_sample_prob)
             pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            #tf = tf.to(device)
+            #_, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             loss = lp_loss(pred, neg_pred)
             loss_accum += float(loss) * len(pred)
             total_count += len(pred)
@@ -289,8 +294,19 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
 # %%
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 model = GINe(num_features=1, num_gnn_layers=3, edge_dim=train_dataset.tensor_frame.num_cols*channels, n_classes=1)
+#from src.nn.models import FTTransformerGINeFused
+#model = FTTransformerGINeFused(
+#   channels=channels,
+#   out_channels=None,
+#   col_stats=dataset.col_stats,
+#   col_names_dict=train_tensor_frame.col_names_dict,
+#   edge_dim=channels*train_dataset.tensor_frame.num_cols,
+#   num_layers=3, 
+#   dropout=0.5,
+#   pretrain=True
+#)
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
