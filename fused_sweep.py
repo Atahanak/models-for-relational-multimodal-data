@@ -101,7 +101,7 @@ parameters_dict.update({
         'value': 64
     },
     'pretrain': {
-        'value': 'lp'
+        'value': 'lp+mask'
     },
     'khop_neighbors': {
         'value': [100, 100]
@@ -160,116 +160,12 @@ def build_loaders(config):
     test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
     return dataset, train_loader, val_loader, test_loader
 
-def create_empty_rows(col_names_dict, num_rows):
-    feat_dict = {}
-    for stype, col_names in col_names_dict.items():
-        if stype == stype.categorical:
-            feat_dict[stype] = torch.full((num_rows, len(col_names)), -1)
-        elif stype == stype.numerical:
-            feat_dict[stype] = torch.full((num_rows, len(col_names)), float('NaN'))
-        elif stype == stype.timestamp:
-            #feat_dict[stype] = torch.full((num_rows, len(col_names)), -1)
-            #hack to get the timestamp encoder to work
-            row_values = [[1970, 0, 0, 3, 0, 0, 0]]
-            feat_dict[stype] = torch.tensor([row_values] * num_rows)
-    return feat_dict
-
-def inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):   
-    edges = tf.y
-    batch_size = len(edges)
-    # ic(edges[:, 2:])
-    # ic(edges[:, :2])
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges[:, 2:], train)
-
-    edge_data = tensor_frame.__getitem__(idx)
-    #ic(edge_data.feat_dict[stype.timestamp][0:5])
-
-    edge_attr, col_names = encoder(edge_data)
-    edge_attr = edge_attr.view(-1, len(col_names) * channels)
-
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0] + 1 # add interaction node
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
-
-    n_id_map = {value.item(): index+1 for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-    # ic(edge_index.shape, edge_attr.shape)
-
-    # sample positive edges
-    positions = torch.arange(batch_size)
-    num_samples = int(len(positions) * pos_sample_prob)
-    if len(positions) > 0 and num_samples > 0:
-        drop_idxs = torch.multinomial(torch.full((len(positions),), 1.0), num_samples, replacement=False)
-    else:
-        drop_idxs = torch.tensor([]).long()
-    drop_edge_ind = positions[drop_idxs]
-
-    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
-    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    
-    # add interaction node to the graph
-    unique_nodes_ids = torch.unique(edges[:, 2:].t()[0:2].flatten())
-    local_unique_nodes_ids = torch.tensor([n_id_map[node.item()] for node in unique_nodes_ids], dtype=torch.long)
-    # ic(unique_nodes_ids.shape)
-    int_edges = torch.stack([local_unique_nodes_ids, torch.tensor([0] * local_unique_nodes_ids.shape[0])], dim=0)
-    int_edge_attr = TensorFrame(create_empty_rows(tensor_frame.col_names_dict, local_unique_nodes_ids.shape[0]), tensor_frame.col_names_dict)
-    input_edge_index = torch.cat([int_edges, edge_index[:, ~mask]], dim=1)
-    input_edge_attr  = torch.cat([encoder(int_edge_attr)[0].view(-1, len(col_names) * channels), edge_attr[~mask]], dim=0)
-    # ic(input_edge_index.shape, input_edge_attr.shape)
-
-    pos_edge_index = edge_index[:, mask]
-    pos_edge_attr  = edge_attr[mask]
-
-    # generate/sample negative edges
-    neg_edges = []
-    neg_edge_attr = []
-    nodeset = set(range(edge_index.max()+1))
-    for i, edge in enumerate(pos_edge_index.t()):
-        src, dst = edge[0], edge[1]
-
-        # Chose negative examples in a smart way
-        unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
-        unavail_nodes = torch.unique(edge_index[:, unavail_mask])
-        unavail_nodes = set(unavail_nodes.tolist())
-        avail_nodes = nodeset - unavail_nodes
-        avail_nodes = torch.tensor(list(avail_nodes))
-        # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
-        indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
-        neg_nodes = avail_nodes[indices]
-        
-        # Generate num_neg_samples/2 negative edges with the same source but different destinations
-        num_neg_samples_half = int(num_neg_samples/2)
-        neg_dsts = neg_nodes[:num_neg_samples_half]  # Selecting num_neg_samples/2 random destination nodes for the source
-        neg_edges_src = torch.stack([src.repeat(num_neg_samples_half), neg_dsts], dim=0)
-        
-        # Generate num_neg_samples/2 negative edges with the same destination but different sources
-        neg_srcs = neg_nodes[num_neg_samples_half:]  # Selecting num_neg_samples/2 random source nodes for the destination
-        neg_edges_dst = torch.stack([neg_srcs, dst.repeat(num_neg_samples_half)], dim=0)
-
-        # Add these negative edges to the list
-        neg_edges.append(neg_edges_src)
-        neg_edges.append(neg_edges_dst)
-        # Replicate the positive edge attribute for each of the negative edges generated from this edge
-        pos_attr = pos_edge_attr[i].unsqueeze(0)  # Get the attribute of the current positive edge
-        
-        replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
-        neg_edge_attr.append(replicated_attr)
-    
-    input_edge_index = input_edge_index.to(device)
-    input_edge_attr = input_edge_attr.to(device)
-    pos_edge_index = pos_edge_index.to(device)
-    pos_edge_attr = pos_edge_attr.to(device)
-    node_feats = node_feats.to(device)
-    neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-    neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
-    return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
-
 def lp_inputs(tf: TensorFrame, dataset, encoder, config, train=True):
     
     num_neg_samples = config.num_neg_samples
     pos_sample_prob = config.pos_sample_prob
+    channels = config.channels
+
     edges = tf.y[:, 2:]
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
@@ -517,7 +413,7 @@ def build_optimizer(model, config):
     return optimizer
 
 def run(config=None):
-    with wandb.init(config=config, dir='/tmp/'):
+    with wandb.init(config=config, dir='/tmp/'): #, mode='disabled'):
         config = wandb.config
         dataset, train_loader, val_loader, _ = build_loaders(config)
         model = build_model(dataset, config)
@@ -528,7 +424,7 @@ def run(config=None):
             stype.timestamp: TimestampEncoder(na_strategy=NAStrategy.OLDEST_TIMESTAMP),
         }
         encoder = StypeWiseFeatureEncoder(
-                    out_channels=channels,
+                    out_channels=config.channels,
                     col_stats=dataset.col_stats,
                     col_names_dict=dataset.tensor_frame.col_names_dict,
                     stype_encoder_dict=stype_encoder_dict,
