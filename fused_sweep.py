@@ -371,7 +371,7 @@ def train(epoc: int, train_loader, dataset, encoder, model, optimizer, config) -
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, dataset, encoder)
+            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, dataset, encoder, config)
             tf = tf.to(device)
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = lp_loss(pos_pred, neg_pred)
@@ -534,8 +534,8 @@ def run(config=None):
                     stype_encoder_dict=stype_encoder_dict,
         )
         for epoch in range(1, epochs + 1):
-            train_loss = train(epoch, train_loader, dataset, encoder, model, optimizer)
-            val_metric = test(val_loader, dataset, encoder, model, "val")
+            train_loss = train(epoch, train_loader, dataset, encoder, model, optimizer, config)
+            val_metric = test(val_loader, dataset, encoder, model, "val", config)
             ic(
                 train_loss, 
                 val_metric, 
