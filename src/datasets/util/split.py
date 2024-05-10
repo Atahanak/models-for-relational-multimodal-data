@@ -1,0 +1,90 @@
+import pandas as pd
+
+import torch_frame
+import torch
+import numpy as np
+import itertools
+
+
+def apply_split(df: pd.DataFrame, split_type: str, splits: list) -> pd.DataFrame:
+    if split_type == 'temporal':
+        df = temporal_balanced_split(df, splits)
+    else:
+        df = random_split(df)
+    return df
+
+
+def random_split(df: pd.DataFrame, seed=42) -> pd.DataFrame:
+    df['split'] = torch_frame.utils.generate_random_split(df.shape[0], seed)
+    return df
+
+
+def temporal_split(df: pd.DataFrame) -> pd.DataFrame:
+    assert 'Timestamp' in df.columns, \
+        '"transaction" split is only available for datasets with a "Timestamp" column'
+    df = df.sort_values(by='Timestamp')
+    train_size = int(df.shape[0] * 0.3)
+    validation_size = int(df.shape[0] * 0.1)
+    test_size = df.shape[0] - train_size - validation_size
+
+    # add split column, use 0 for train, 1 for validation, 2 for test
+    df['split'] = [0] * train_size + [1] * validation_size + [2] * test_size
+    return df
+
+
+def temporal_balanced_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
+    assert 'Timestamp' in df.columns, \
+        '"transaction" split is only available for datasets with a "Timestamp" column'
+    df['Timestamp'] = df['Timestamp'] - df['Timestamp'].min()
+
+    timestamps = torch.Tensor(df['Timestamp'].to_numpy())
+    n_days = int(timestamps.max() / (3600 * 24) + 1)
+
+    daily_inds, daily_trans = [], []  # irs = illicit ratios, inds = indices, trans = transactions
+    for day in range(n_days):
+        l = day * 24 * 3600
+        r = (day + 1) * 24 * 3600
+        day_inds = torch.where((timestamps >= l) & (timestamps < r))[0]
+        daily_inds.append(day_inds)
+        daily_trans.append(day_inds.shape[0])
+
+    split_per = splits
+    # split_per = [0.8, 0.2]
+    daily_totals = np.array(daily_trans)
+    d_ts = daily_totals
+    I = list(range(len(d_ts)))
+    split_scores = dict()
+    for i, j in itertools.combinations(I, 2):
+        if j >= i:
+            split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
+            # split_totals = [d_ts[:i].sum(), d_ts[i:].sum()]
+            split_totals_sum = np.sum(split_totals)
+            split_props = [v / split_totals_sum for v in split_totals]
+            split_error = [abs(v - t) / t for v, t in zip(split_props, split_per)]
+            score = max(split_error)  # - (split_totals_sum/total) + 1
+            split_scores[(i, j)] = score
+        else:
+            continue
+
+    i, j = min(split_scores, key=split_scores.get)
+    # split contains a list for each split (train, validation and test) and each list contains the days that are part of the respective split
+    split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
+
+    # Now, we seperate the transactions based on their indices in the timestamp array
+    split_inds = {k: [] for k in range(3)}
+    for i in range(3):
+        for day in split[i]:
+            split_inds[i].append(daily_inds[
+                                     day])  # split_inds contains a list for each split (tr,val,te) which contains the indices of each day seperately
+
+    # tr_inds = torch.cat(split_inds[0])
+    val_inds = torch.cat(split_inds[1])
+    te_inds = torch.cat(split_inds[2])
+
+    # add a new split column to df
+    df['split'] = 0
+
+    # Set values for val_inds and te_inds
+    df.loc[val_inds, 'split'] = 1
+    df.loc[te_inds, 'split'] = 2
+    return df

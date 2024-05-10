@@ -4,11 +4,12 @@ import torch_geometric
 from torch_geometric.sampler.neighbor_sampler import NeighborSampler
 from torch_geometric.sampler import EdgeSamplerInput
 import pandas as pd
-import numpy as np
-import itertools
 
-import sys
 from icecream import ic
+
+from datasets.util.mask import PretrainType, apply_transformation, set_target_col
+from datasets.util.split import apply_split
+
 
 class IBMTransactionsAML(torch_frame.data.Dataset):
         r"""`"Realistic Synthetic Financial Transactions for Anti-Money Laundering Models" https://arxiv.org/pdf/2306.16424.pdf`_.
@@ -31,7 +32,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, pretrain=None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
+        def __init__(self, root, pretrain: set[PretrainType] = frozenset(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -75,147 +76,16 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Amount Received': torch_frame.numerical
             }
 
-            if self.split_type == 'temporal':
-                self.temporal_balanced_split()
-            else:
-                self.random_split()
+            self.df = apply_split(self.df, self.split_type, self.splits)
 
-            if 'mask' in pretrain: # mask a column of each row
-                maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format']
-                self.df['mask'] = None
-                self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
-                col_to_stype['mask'] = torch_frame.mask
-            
-            self.sampler = None
-            if 'lp' in pretrain: # initialize training graph and neighbor sampler
-                #TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
-                self.df['link'] = self.df[['From ID', 'To ID']].apply(list, axis=1)
-                col_to_stype['link'] = torch_frame.relation
-                def append_index_to_link(row):
-                    row['link'].append(float(row.name))
-                    return row
-                self.df = self.df.apply(append_index_to_link, axis=1)
-                
-                # get number of uique ids in the dataset
-                num_nodes = len(set(self.df['From ID'].to_list() + self.df['To ID'].to_list()))
-                
-                # init train and val graph
-                self.edges = self.df['link'].to_numpy()
-                self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
-                #self.train_edges = self.edges
-                #val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
+            maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency',
+                                'Payment Format']
+            for transformation in pretrain:
+                col_to_stype = apply_transformation(self, "From ID", "To ID", maskable_columns, col_to_stype, transformation)
 
-                source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
-                destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
-                ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
-                train_edge_index = torch.stack([source, destination], dim=0)
-                x = torch.arange(num_nodes)
-                self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
-                self.sampler =  NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
-            
-            if pretrain == 'lp':
-                self.target_col = 'link'
-            elif pretrain == 'mask':
-                self.target_col = 'mask'
-            elif pretrain == 'lp+mask' or pretrain == 'mask+lp':
-                # merge link and mask columns into a column called target
-                self.df['target'] = self.df['mask'] + self.df['link']
-                col_to_stype['target'] = torch_frame.mask
-                self.target_col = 'target'
-                ic(self.df['link'][0:5])
-                ic(self.df['mask'][0:5])
-                ic(self.df['target'][0:5])
-                self.df = self.df.drop(columns=['link', 'mask'])
-                del col_to_stype['link']
-                del col_to_stype['mask']
-            else:
-                col_to_stype['Is Laundering'] = torch_frame.categorical
-                self.target_col = 'Is Laundering'
+            col_to_stype = set_target_col(self, pretrain, col_to_stype)
 
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
-        
-        def random_split(self, seed=42):
-            self.df['split'] = torch_frame.utils.generate_random_split(self.df.shape[0], seed)
-
-        def temporal_split(self):
-            assert 'Timestamp' in self.df.columns, \
-            '"transaction" split is only available for datasets with a "Timestamp" column'
-            self.df = self.df.sort_values(by='Timestamp')
-            train_size = int(self.df.shape[0] * 0.3)
-            validation_size = int(self.df.shape[0] * 0.1)
-            test_size = self.df.shape[0] - train_size - validation_size
-
-            #add split column, use 0 for train, 1 for validation, 2 for test
-            self.df['split'] = [0] * train_size + [1] * validation_size + [2] * test_size 
-
-        def temporal_balanced_split(self):
-            assert 'Timestamp' in self.df.columns, \
-            '"transaction" split is only available for datasets with a "Timestamp" column'
-            self.df['Timestamp'] = self.df['Timestamp'] - self.df['Timestamp'].min()
-
-            timestamps = torch.Tensor(self.df['Timestamp'].to_numpy())
-            n_days = int(timestamps.max() / (3600 * 24) + 1)
-
-            daily_inds, daily_trans = [], [] #irs = illicit ratios, inds = indices, trans = transactions
-            for day in range(n_days):
-                l = day * 24 * 3600
-                r = (day + 1) * 24 * 3600
-                day_inds = torch.where((timestamps >= l) & (timestamps < r))[0]
-                daily_inds.append(day_inds)
-                daily_trans.append(day_inds.shape[0])
-            
-            split_per = self.splits
-            #split_per = [0.8, 0.2]
-            daily_totals = np.array(daily_trans)
-            d_ts = daily_totals
-            I = list(range(len(d_ts)))
-            split_scores = dict()
-            for i,j in itertools.combinations(I, 2):
-                if j >= i:
-                    split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
-                    #split_totals = [d_ts[:i].sum(), d_ts[i:].sum()]
-                    split_totals_sum = np.sum(split_totals)
-                    split_props = [v/split_totals_sum for v in split_totals]
-                    split_error = [abs(v-t)/t for v,t in zip(split_props, split_per)]
-                    score = max(split_error) #- (split_totals_sum/total) + 1
-                    split_scores[(i,j)] = score
-                else:
-                    continue
-            
-            i,j = min(split_scores, key=split_scores.get)
-            #split contains a list for each split (train, validation and test) and each list contains the days that are part of the respective split
-            split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
-
-            #Now, we seperate the transactions based on their indices in the timestamp array
-            split_inds = {k: [] for k in range(3)}
-            for i in range(3):
-                for day in split[i]:
-                    split_inds[i].append(daily_inds[day]) #split_inds contains a list for each split (tr,val,te) which contains the indices of each day seperately
-
-            #tr_inds = torch.cat(split_inds[0])
-            val_inds = torch.cat(split_inds[1])
-            te_inds = torch.cat(split_inds[2])
-            
-            #add a new split column to df
-            self.df['split'] = 0
-
-            # Set values for val_inds and te_inds
-            self.df.loc[val_inds, 'split'] = 1
-            self.df.loc[te_inds, 'split'] = 2
-        
-        # Randomly mask a column of each row and store original value and max index
-        def mask_column(self, row, maskable_cols):
-            col_to_mask = np.random.choice(maskable_cols)  # Choose a column randomly
-            original_value = row[col_to_mask]
-            row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
-
-            #row[col_to_mask] = np.nan
-            # hack to escape nan error in torch_frame
-            if col_to_mask in ['Amount Received', 'Amount Paid']:
-                row[col_to_mask] = -1
-            else:
-                row[col_to_mask] = '[MASK]'
-            return row
 
         def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
             """k-hop sampling.
