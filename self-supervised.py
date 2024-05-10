@@ -27,7 +27,7 @@ num_layers = 4
 data_split = [0.6, 0.2, 0.2]
 split_type = "temporal"
 
-pretrain = 'mask'
+pretrain = {PretrainType.MASK}
 compile = False
 lr = 5e-4
 eps = 1e-8
@@ -206,7 +206,7 @@ def test(loader: DataLoader, dataset_name) -> float:
         return [rmse, accuracy]
 
 # %%
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 # train_metric = test(train_loader, "train")
 # val_metric = test(val_loader, "val")
 # test_metric = test(test_loader, "test")
