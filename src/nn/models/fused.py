@@ -190,6 +190,10 @@ class FTTransformerGINeFused(Module):
 
         for fused_layer in self.backbone:
             x_tab, x_gnn, edge_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
+            # x_t, x_g, e_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
+            # x_tab = x_tab + x_t
+            # x_gnn = x_gnn + x_g
+            # edge_attr = edge_attr + e_attr
 
         #pos_edge_attr = self.edge_emb(self.encoder(pos_edge_attr))
         pos_edge_attr = self.edge_emb(pos_edge_attr)
@@ -205,7 +209,9 @@ class FTTransformerGINeFusedLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5):
         super().__init__()
         self.channels = channels
-        fused_dim = channels + nhidden
+        self.nhidden = nhidden
+        # fused_dim = channels + nhidden
+        fused_dim = channels + 2*nhidden
 
         # fttransformer
         self.tab_conv = TransformerEncoderLayer(
@@ -228,11 +234,11 @@ class FTTransformerGINeFusedLayer(Module):
             Linear(nhidden, nhidden)
         ), edge_dim=nhidden)
         self.gnn_norm = BatchNorm(nhidden)
-        self.edge = Sequential(
-            Linear(3 * nhidden, nhidden),
-            ReLU(),
-            Linear(nhidden, nhidden),
-        )
+        # self.edge = Sequential(
+        #     Linear(3 * nhidden, nhidden),
+        #     ReLU(),
+        #     Linear(nhidden, nhidden),
+        # )
 
         # fuse
         self.fuse = Sequential(
@@ -251,20 +257,44 @@ class FTTransformerGINeFusedLayer(Module):
                 torch.nn.init.xavier_uniform_(p)
         self.tab_norm.reset_parameters()
         self.gnn_conv.reset_parameters()
-        for p in self.edge.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
+        # for p in self.edge.parameters():
+        #     if p.dim() > 1:
+        #         torch.nn.init.xavier_uniform_(p)
         self.gnn_norm.reset_parameters()
         for p in self.fuse.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
+
+    # def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+    #     x_tab = self.tab_norm(self.tab_conv(x_tab))
+    #     x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+
+    #     x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
+    #     edge_attr = edge_attr + self.edge(torch.cat([x_gnn[edge_index[0]], x_gnn[edge_index[1]], edge_attr], dim=-1)) / 2
+
+    #     # fuse node interaction with pooled row embeddings
+    #     # x_tab_cls_m = torch.mean(x_tab[:, 0, :], dim=0).unsqueeze(0).flatten()
+    #     # x_gnn_int, x_gnn = x_gnn[0, :], x_gnn[1:, :]
+    #     # x = torch.cat([x_tab_cls_m, x_gnn_int], dim=-1)
+    #     # x = (x + self.fuse(x)) / 2
+    #     # x_tab = torch.cat([(x[:self.channels].unsqueeze(0) + x_tab_cls / 2).unsqueeze(1), x_tab], dim=1) 
+    #     # x_gnn = torch.cat([(x_gnn_int + x[self.channels:] / 2).unsqueeze(0), x_gnn])
+
+    #     #int_attr, seed_attr, sampled_attr = edge_attr[0,:],  edge_attr[1:1+x_tab_cls.shape[0],:], edge_attr[1+x_tab_cls.shape[0]:,:]
+    #     seed_attr, sampled_attr = edge_attr[:x_tab_cls.shape[0],:], edge_attr[x_tab_cls.shape[0]:,:]
+    #     x = torch.cat([x_tab_cls, seed_attr], dim=-1)
+    #     x = (x + self.fuse(x)) / 2
+    #     x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
+    #     #edge_attr = torch.cat([int_attr.unsqueeze(0), x[:,self.channels:], sampled_attr], dim=0)
+    #     edge_attr = torch.cat([x[:,self.channels:], sampled_attr], dim=0)
+
+    #     return x_tab, x_gnn, edge_attr
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr):
         x_tab = self.tab_norm(self.tab_conv(x_tab))
         x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-        edge_attr = edge_attr + self.edge(torch.cat([x_gnn[edge_index[0]], x_gnn[edge_index[1]], edge_attr], dim=-1)) / 2
 
         # fuse node interaction with pooled row embeddings
         # x_tab_cls_m = torch.mean(x_tab[:, 0, :], dim=0).unsqueeze(0).flatten()
@@ -274,12 +304,18 @@ class FTTransformerGINeFusedLayer(Module):
         # x_tab = torch.cat([(x[:self.channels].unsqueeze(0) + x_tab_cls / 2).unsqueeze(1), x_tab], dim=1) 
         # x_gnn = torch.cat([(x_gnn_int + x[self.channels:] / 2).unsqueeze(0), x_gnn])
 
-        #int_attr, seed_attr, sampled_attr = edge_attr[0,:],  edge_attr[1:1+x_tab_cls.shape[0],:], edge_attr[1+x_tab_cls.shape[0]:,:]
-        seed_attr, sampled_attr = edge_attr[:x_tab_cls.shape[0],:], edge_attr[x_tab_cls.shape[0]:,:]
-        x = torch.cat([x_tab_cls, seed_attr], dim=-1)
+        x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
+        x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
+        # ic(x_src_gnn.shape, x_dst_gnn.shape)
+        # ic(x_src_gnn)
+        # sys.exit()
+        x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
         x = (x + self.fuse(x)) / 2
         x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
+        x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
+        x_gnn[edge_index[0][0:x_tab_cls.shape[0]]] = x_src_gnn
+        x_gnn[edge_index[1][0:x_tab_cls.shape[0]]] = x_dst_gnn
+        
         #edge_attr = torch.cat([int_attr.unsqueeze(0), x[:,self.channels:], sampled_attr], dim=0)
-        edge_attr = torch.cat([x[:,self.channels:], sampled_attr], dim=0)
 
         return x_tab, x_gnn, edge_attr
