@@ -44,7 +44,7 @@ data_split = [0.6, 0.2, 0.2]
 split_type = 'temporal'
 
 khop_neighbors = [100, 100]
-pos_sample_prob = 0.15
+pos_sample_prob = 1
 num_neg_samples = 64
 channels = 128
 

@@ -16,7 +16,7 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 from torch_frame import NAStrategy
 from torch_frame import TensorFrame
 
-from transformers import get_inverse_sqrt_schedule
+#from transformers import get_inverse_sqrt_schedule
 
 from src.datasets import IBMTransactionsAML
 from src.nn.models import FTTransformerGINeFused
@@ -42,7 +42,7 @@ data_split = [0.6, 0.2, 0.2]
 split_type = 'temporal'
 
 khop_neighbors = [100, 100]
-pos_sample_prob = 0.15
+pos_sample_prob = 1
 num_neg_samples = 64
 channels = 128
 num_layers = 3
@@ -68,25 +68,31 @@ metric = {
 }
 sweep_config['metric'] = metric
 parameters_dict = {
-    'lr': {
-        #'values': [1e-4, 5e-4, 1e-3]
-        'distribution': 'uniform',
-        'min': 0,
-        'max': 3e-4
-    },
+    #'lr': {
+    #    #'values': [1e-4, 5e-4, 1e-3]
+    #    'distribution': 'uniform',
+    #    'min': 1e-4,
+    #    'max': 3e-4
+    #},
     'dropout': {
         'values': [0.3, 0.5, 0.7]
     },
-    'channels': {
-        'values': [16, 32, 64]
+    'batch_size': {
+        'values': [100, 200, 300]
     },
+    #'channels': {
+    #    'values': [128, 256, 512]
+    #},
 }
 parameters_dict.update({
+    'channels': {
+        'value': 128
+    },
+    'lr': {
+        'value': 2e-4,
+    },
     'batch_size': {
         'value': 200
-    },
-    'dropout': {
-        'value': 0.5
     },
     'epochs': {
         'value': 1
