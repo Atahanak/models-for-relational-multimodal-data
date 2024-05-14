@@ -20,9 +20,9 @@ def apply_transformation(self: torch_frame.data.Dataset,
                          src_column: str, dst_column: str,
                          maskable_columns: list[str],
                          col_to_stype: dict[str, torch_frame.stype],
-                         transformation: PretrainType) -> dict[str, torch_frame.stype]:
+                         transformation: PretrainType, mask_type: str) -> dict[str, torch_frame.stype]:
     if transformation == PretrainType.MASK:
-        return apply_mask(self, maskable_columns, col_to_stype)
+        return apply_mask(self, maskable_columns, col_to_stype, mask_type)
     elif transformation == PretrainType.MASK_VECTOR:
         return apply_mask_vector(self, maskable_columns, col_to_stype)
     else:
@@ -54,10 +54,39 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
     return col_to_stype
 
 
-def apply_mask(self: torch_frame.data.Dataset, maskable_columns: list[str], col_to_stype: dict[str, torch_frame.stype]) \
-        -> dict[str, torch_frame.stype]:
+def apply_mask(self: torch_frame.data.Dataset, maskable_columns: list[str],
+               col_to_stype: dict[str, torch_frame.stype], mask_type: str) -> dict[str, torch_frame.stype]:
+    def _impute_mask_vector(row: pd.Series):
+        masked_column = np.random.choice(maskable_columns)
+        original_value = row[masked_column]
+        row['mask'] = [original_value, masked_column]
+        col_ser = self.df[masked_column]
+        replacement = col_ser[col_ser != row[masked_column]].sample().values[0]  # don't include original value
+        row[masked_column] = replacement
+        return row
+
     self.df['mask'] = None
-    self.df = self.df.apply(_mask_column, args=(maskable_columns,), axis=1)
+    if mask_type == "remove":
+        self.df = self.df.apply(_mask_column, args=(maskable_columns,), axis=1)
+    elif mask_type == "replace":
+        self.df = self.df.apply(_impute_mask_vector, axis=1)
+    elif mask_type == "bert":
+        def _choose_mask_type(row: pd.Series):
+            p = np.random.rand()
+            if p < 0.6:
+                print("Masking")
+                return _mask_column(row, maskable_columns)
+            elif p < 0.8:
+                print("Imputing")
+                return _impute_mask_vector(row)
+            else:
+                print("Doing nothing")
+                mask_column = np.random.choice(maskable_columns)
+                original_value = row[mask_column]
+                row['mask'] = [original_value, mask_column]
+                return row
+        self.df = self.df.apply(_choose_mask_type, axis=1)
+
     col_to_stype['mask'] = torch_frame.mask
     return col_to_stype
 
@@ -70,7 +99,6 @@ def apply_mask_vector(self: torch_frame.data.Dataset, maskable_columns: list[str
 
     # Helper function to impute masked values from the column's distribution
     def _impute_mask_vector(row: pd.Series):
-        # TODO: potential problem being that we sample the same value as we are replacing
         mask_vector = _generate_mask_vector(maskable_columns, p_m)
         original_value_col_pairs = []
         for mask_column in mask_vector:
@@ -136,7 +164,10 @@ def _mask_column(row: pd.Series, maskable_cols):
     return row
 
 
-def _generate_mask_vector(maskable_vector: list[str], p_m: float):
-    # Takes a vector where 0s are not maskable and 1s are maskable, and returns a vector with 1s masked with probability p_m
-    return [col for col in maskable_vector if np.random.rand() < p_m]
+def _generate_mask_vector(maskable_vector: list[str], p_m: float = None, n: int = None):
+    # Generates a mask vector for a given row, either with n masked elements or binomially with probability p_m
+    if n is not None:
+        return np.random.choice(maskable_vector, n, replace=False)
+    else:
+        return [col for col in maskable_vector if np.random.rand() < p_m]
 
