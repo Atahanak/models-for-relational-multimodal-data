@@ -6,6 +6,7 @@ from torch import Tensor
 from torch.nn import Module
 
 import torch_frame
+from datasets.util.mask import PretrainType
 from torch_frame import TensorFrame, stype
 from torch_frame.data.stats import StatType
 from torch_frame.nn.conv import FTTransformerConvs
@@ -16,7 +17,7 @@ from torch_frame.nn.encoder.stype_encoder import (
 )
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
-from ..decoder import SelfSupervisedHead
+from ..decoder import SelfSupervisedHead, SelfSupervisedMVHead
 from ..decoder import SupervisedHead
 
 class FTTransformer(Module):
@@ -85,6 +86,11 @@ class FTTransformer(Module):
         if pretrain:
             num_numerical = len(col_names_dict[stype.numerical])
             num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
+
+            if PretrainType.MASK in pretrain:
+                self.decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
+            else:
+                self.decoder = SelfSupervisedMVHead(channels, num_numerical, num_categorical)
             # self.num_decoder = Sequential(
             #     LayerNorm(channels),
             #     ReLU(),
@@ -95,7 +101,6 @@ class FTTransformer(Module):
             #     ReLU(),
             #     Linear(channels, num_classes),
             # ) for num_classes in num_categorical])
-            self.decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
         else:
             # self.decoder = Sequential(
             #     LayerNorm(channels),

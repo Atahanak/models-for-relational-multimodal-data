@@ -32,7 +32,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, pretrain: set[PretrainType] = frozenset(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
+        def __init__(self, root, pretrain: set[PretrainType] = None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
             self.root = root
             self.split_type = split_type
             self.splits = splits
