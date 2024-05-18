@@ -25,7 +25,7 @@ from src.utils.loss import lp_loss
 from src.utils.metric import mrr
 
 from tqdm import tqdm
-# import wandb
+import wandb
 
 from icecream import ic
 import sys
@@ -88,21 +88,21 @@ torch.backends.cudnn.benchmark = False
 os.environ["PYTHONHASHSEED"] = str(seed)
 
 # %%
-# wandb.login()
-# run = wandb.init(
-#     dir="/mnt/data/",
-#     mode="disabled" if args['testing'] else "online",
-#     project=f"rel-mm-2", 
-#     name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective={pretrain},only-last-layer-fuse,fusenorm,correct",
-#     #name=f"debug-fused",
-#     config=args
-# )
+wandb.login()
+run = wandb.init(
+    dir="/mnt/data/",
+    mode="disabled" if args['testing'] else "online",
+    project=f"rel-mm-2", 
+    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective={pretrain},only-last-layer-fuse,fusenorm,correct",
+    #name=f"debug-fused",
+    config=args
+)
 
 # %%
 dataset = IBMTransactionsAML(
     # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/home/dragomir/Downloads/dummy-10k-random-c.csv', 
+    root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     pretrain=pretrain, 
     split_type=split_type, 
     splits=data_split, 
@@ -422,7 +422,7 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             del t_loss
             del loss_c
             del loss_n
-            # wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
         #optimizer.state.clear()
     return {'loss': loss_accum / total_count}
 
@@ -488,12 +488,12 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             del cat_pred
             del edge_index
             del edge_attr
-            # wandb.log({
-            #     f"{dataset_name}_loss": loss_accum/total_count,
-            #     f"{dataset_name}_loss_c": loss_c_accum/t_c,
-            #     f"{dataset_name}_loss_n": loss_n_accum/t_n,
-            #     f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
-            # })
+            wandb.log({
+                f"{dataset_name}_loss": loss_accum/total_count,
+                f"{dataset_name}_loss_c": loss_c_accum/t_c,
+                f"{dataset_name}_loss_n": loss_n_accum/t_n,
+                f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
@@ -501,15 +501,15 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         hits10 = np.mean(hits10)
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
-        # wandb.log({
-        #     f"{dataset_name}_mrr": mrr_score,
-        #     f"{dataset_name}_hits@1": hits1,
-        #     f"{dataset_name}_hits@2": hits2,
-        #     f"{dataset_name}_hits@5": hits5,
-        #     f"{dataset_name}_hits@10": hits10,
-        #     f"{dataset_name}_accuracy": accuracy,
-        #     f"{dataset_name}_rmse": rmse,
-        # })
+        wandb.log({
+            f"{dataset_name}_mrr": mrr_score,
+            f"{dataset_name}_hits@1": hits1,
+            f"{dataset_name}_hits@2": hits2,
+            f"{dataset_name}_hits@5": hits5,
+            f"{dataset_name}_hits@10": hits10,
+            f"{dataset_name}_accuracy": accuracy,
+            f"{dataset_name}_rmse": rmse,
+        })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
 # %%
@@ -528,7 +528,7 @@ model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 ic(learnable_params)
-# wandb.log({"learnable_params": learnable_params})
+wandb.log({"learnable_params": learnable_params})
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
@@ -575,6 +575,6 @@ for epoch in range(1, epochs + 1):
     )
 
 # %%
-# wandb.finish()
+wandb.finish()
 
 
