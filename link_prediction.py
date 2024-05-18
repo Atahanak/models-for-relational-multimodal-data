@@ -33,9 +33,10 @@ torch.set_float32_matmul_precision('high')
 # %%
 seed = 42
 batch_size = 200
-lr = 5e-4
+lr = 2e-4
 eps = 1e-8
-epochs = 1
+epochs = 3
+weight_decay = 1e-3
 
 compile = False
 data_split = [0.6, 0.2, 0.2]
@@ -44,7 +45,7 @@ split_type = 'temporal'
 khop_neighbors = [100, 100]
 pos_sample_prob = 1
 num_neg_samples = 64
-channels = 128
+channels = 256
 
 pretrain = 'lp'
 
@@ -65,6 +66,7 @@ args = {
     'num_neg_samples': num_neg_samples,
     'pretrain': pretrain,
     'khop_neighbors': khop_neighbors,
+    'weight_decay': weight_decay,
 }
 
 # %%
@@ -81,11 +83,11 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 # %%
 wandb.login()
 run = wandb.init(
-    dir="/mnt/data/wandb",
+    dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm", 
-    #name=f"model=FTTransformerGINeFused-NodeUpdates,dataset=IBM-AML_Hi_Sm,objective=lp,neg_samples={num_neg_samples},channels={channels},pos_prob={pos_sample_prob}",
-    name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,neg_samples={num_neg_samples},channels={channels},pos_prob={pos_sample_prob}",
+    project=f"rel-mm-2", 
+    #name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
+    name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
     config=args
 )
 
@@ -116,11 +118,11 @@ g = torch.Generator()
 g.manual_seed(seed)
 tensor_frame = dataset.tensor_frame
 train_tensor_frame = train_dataset.tensor_frame
-train_loader = DataLoader(train_tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
+train_loader = DataLoader(train_tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g, num_workers=4)
 val_tensor_frame = val_dataset.tensor_frame
-val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
 test_tensor_frame = test_dataset.tensor_frame
-test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
 
 stype_encoder_dict = {
     stype.categorical: EmbeddingEncoder(),
@@ -232,12 +234,12 @@ def train(epoc: int, model, optimizer) -> float:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            loss_accum += float(loss) * len(pred)
+            loss_accum += loss.item() * len(pred)
             total_count += len(pred)
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
             del pred
             del tf
-            wandb.log({"train_loss": loss_accum/total_count})
+            wandb.log({"train_loss_lp": loss_accum/total_count})
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
@@ -257,7 +259,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             #tf = tf.to(device)
             #_, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             loss = lp_loss(pred, neg_pred)
-            loss_accum += float(loss) * len(pred)
+            loss_accum += loss.item() * len(pred)
             total_count += len(pred)
             mrr_score, hits = mrr(pred, neg_pred, [1,2,5,10], num_neg_samples)
             mrrs.append(mrr_score)
@@ -315,12 +317,12 @@ wandb.log({"learnable_params": learnable_params})
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
-    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
+#optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
 # train_metric = test(train_loader, model, "tr")
 # val_metric = test(val_loader, model, "val")

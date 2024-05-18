@@ -17,8 +17,6 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 from torch_frame import NAStrategy
 from torch_frame import TensorFrame
 
-from transformers import get_inverse_sqrt_schedule
-
 from src.datasets import IBMTransactionsAML
 from src.nn.models import FTTransformerGINeFused
 from src.utils.loss import lp_loss
@@ -35,8 +33,9 @@ torch.set_float32_matmul_precision('high')
 # %%
 seed = 42
 batch_size = 200
-lr = 5e-4
+lr = 2e-4
 eps = 1e-8
+weight_decay = 1e-3
 epochs = 3
 
 compile = False
@@ -47,6 +46,8 @@ khop_neighbors = [100, 100]
 pos_sample_prob = 1
 num_neg_samples = 64
 channels = 128
+num_layers = 3
+dropout = 0.5
 
 pretrain = 'mask+lp'
 #pretrain = 'lp'
@@ -68,6 +69,9 @@ args = {
     'num_neg_samples': num_neg_samples,
     'pretrain': pretrain,
     'khop_neighbors': khop_neighbors,
+    'num_layers': num_layers,
+    'dropout': dropout,
+    'weight_decay': weight_decay,
 }
 
 # %%
@@ -84,9 +88,10 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 # %%
 wandb.login()
 run = wandb.init(
+    dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm", 
-    name=f"model=FTTransformerGINeFusedNodeUpdates,dataset=IBM-AML_Hi_Sm,objective={pretrain},khop_neighs=[100,100],channels={channels},epoch=1",
+    project=f"rel-mm-2", 
+    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective={pretrain},only-last-layer-fuse,fusenorm,correct",
     #name=f"debug-fused",
     config=args
 )
@@ -158,7 +163,7 @@ def create_empty_rows(col_names_dict, num_rows):
             feat_dict[stype] = torch.tensor([row_values] * num_rows)
     return feat_dict
 
-def inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):   
+def inputs(tf: TensorFrame, pos_sample_prob=1, train=True):   
     edges = tf.y
     batch_size = len(edges)
     # ic(edges[:, 2:])
@@ -250,7 +255,7 @@ def inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
     neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
     return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
 
-def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
+def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     
     edges = tf.y[:, 2:]
     batch_size = len(edges)
@@ -346,31 +351,48 @@ def calc_loss(cat_pred, num_pred, y):
             accum_n += torch.square(num_pred[i][int(ans[1])] - ans[0]) #mse
     return (accum_n / t_n) + torch.sqrt(accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
 
-def train(epoc: int, model, optimizer) -> float:
+def optimizer_step(optimizers, losses):
+    if len(optimizers) != len(losses):
+        raise ValueError("Number of optimizers and losses should be the same")
+    if not isinstance(optimizers, list):
+        optimizers = [optimizers]
+        losses = [losses]
+    #for i, (optimizer, loss) in enumerate(zip(optimizers, losses)):
+    for i, (optimizer, loss) in enumerate(zip(optimizers, losses)):
+        optimizer.zero_grad()
+        loss.backward(retain_graph=(i < len(optimizers)-1))
+        optimizer.step()
+
+def train(epoc: int, model, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
+            # Get the updated learning rate and log it
+            #updated_lr = optimizer.param_groups[0]['lr']
+            #wandb.log({"lr": updated_lr})
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
             tf = tf.to(device)
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y)
             loss = link_loss + t_loss
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
+            #optimizer_step(optimizer, [link_loss, t_loss])
+            optimizer_step(optimizer, [loss])
+            #optimizer.zero_grad()
+            #loss.backward()
+            #optimizer.step()
+            #scheduler.step()
 
-            loss_accum += float(loss) * len(pos_pred)
+            loss_accum += (loss.item() * len(pos_pred))
             total_count += len(pos_pred)
             t_c += loss_c[1]
             t_n += loss_n[1]
-            loss_c_accum += loss_c[0]
-            loss_n_accum += loss_n[0]
-            loss_lp_accum += link_loss * len(pos_pred)
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
+            loss_lp_accum += link_loss.item() * len(pos_pred)
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
             del pos_pred
             del neg_pred
@@ -379,8 +401,13 @@ def train(epoc: int, model, optimizer) -> float:
             del edge_index
             del edge_attr
             del tf
+            del loss
+            del link_loss
+            del t_loss
+            del loss_c
+            del loss_n
             wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
-        optimizer.state.clear()
+        #optimizer.state.clear()
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
@@ -470,15 +497,14 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
 # %%
-torch.autograd.set_detect_anomaly(False)
 model = FTTransformerGINeFused(
     channels=channels,
     out_channels=None,
     col_stats=dataset.col_stats,
     col_names_dict=train_tensor_frame.col_names_dict,
     edge_dim=channels*train_dataset.tensor_frame.num_cols,
-    num_layers=3, 
-    dropout=0.5,
+    num_layers=num_layers, 
+    dropout=dropout,
     pretrain=True
 )
 model = torch.compile(model, dynamic=True) if compile else model
@@ -489,12 +515,24 @@ wandb.log({"learnable_params": learnable_params})
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
-    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
+]
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
-scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+params_lp = [
+        {'params': [param for name, param in model.named_parameters() if 'tab_conv' not in name and 'mcm_decoder' not in name and not any(nd in name for nd in no_decay)], 'weight_decay': weight_decay},
+        {'params': [param for name, param in model.named_parameters() if 'tab_conv' not in name and 'mcm_decoder' not in name and any(nd in name for nd in no_decay)], 'weight_decay': 0.0},
+]
+#params_lp = [param for name, param in model.named_parameters() if 'tab_conv' not in name and 'mcm_decoder' not in name]
+params_mcm = [
+        {'params': [param for name, param in model.named_parameters() if 'gnn_conv' not in name and 'lp_decoder' not in name and not any(nd in name for nd in no_decay)], 'weight_decay': weight_decay},
+        {'params': [param for name, param in model.named_parameters() if 'gnn_conv' not in name and 'lp_decoder' not in name and any(nd in name for nd in no_decay)], 'weight_decay': 0.0},
+]
+#params_mcm = [param for name, param in model.named_parameters() if 'lp_decoder' not in name and 'gnn_conv' not in name]
+
+optimizer_mcm = torch.optim.AdamW(params_mcm, lr=lr, eps=eps, weight_decay=weight_decay)
+optimizer_lp = torch.optim.AdamW(params_lp, lr=lr, eps=eps, weight_decay=weight_decay)
+scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer_mcm, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
 
 # train_metric = test(train_loader, model, "tr")
 # val_metric = test(val_loader, model, "val")
@@ -505,8 +543,10 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 #         test_metric
 # )
 
+torch.autograd.set_detect_anomaly(False)
 for epoch in range(1, epochs + 1):
-    train_loss = train(epoch, model, optimizer)
+    train_loss = train(epoch, model, [optimizer], scheduler)
+    #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
     train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
     test_metric = test(test_loader, model, "test")
