@@ -39,8 +39,8 @@ def main():
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     args.device = device
-    args.name += f"-{args.device}-{args.nrows}"
-
+    print(args.name)
+    ########### Wandb Setup ############
     wandb.login()
     run = wandb.init(
         mode="disabled" if args.testing else "online",
@@ -48,6 +48,8 @@ def main():
         name=args.name,
         config=args
     )
+    script_path = "/home/cgriu/cse3000/slurm/fashion/"+args.name+".sh"
+    wandb.save(script_path)
 
     if not args.finetune:
         text_encoder = TextToEmbedding(model=args.text_model, device=device)
@@ -210,22 +212,76 @@ def train(
     model.train()
     loss_accum = total_count = 0
 
+    # Lists to store time measurements
+    data_load_times = []
+    device_transfer_times = []
+    loss_computation_times = []
+    backward_times = []
+    forward_times = []
+    batch_times = []
+
+    # Start initial time before the loop begins
+    end_time = time.time()
+
     for tf in tqdm(loader, desc=f"Epoch: {epoch}"):
+        # Calculate data load time from the end of the previous iteration
+        start_time = time.time()
+        data_load_time = start_time - end_time
+
+        # Time to transfer data to device
+        start_transfer_time = time.time()
         tf = tf.to(device)
         y = tf.y
+        device_transfer_time = time.time() - start_transfer_time
+
+        # Forward pass and loss computation\
+        start_forward_time = time.time()
         pred = model(tf)
+        forward_time = time.time() - start_forward_time
 
         if pred.size(1) == 1:
             pred = pred.view(-1, )
 
         if task_type == TaskType.BINARY_CLASSIFICATION:
             y = y.to(torch.float)
+        
+        start_loss_time = time.time()
         loss = loss_fun(pred, y)
+        loss_computation_time = time.time() - start_loss_time
+
+        # Backward pass
+        start_backward_time = time.time()
         optimizer.zero_grad()
         loss.backward()
+        optimizer.step()
+        backward_time = time.time() - start_backward_time
+
+        # Record times
+        data_load_times.append(data_load_time)
+        device_transfer_times.append(device_transfer_time)
+        loss_computation_times.append(loss_computation_time)
+        backward_times.append(backward_time)
+        forward_times.append(forward_time)
+
+        # Accumulate loss for average calculation
         loss_accum += float(loss.item()) * len(tf.y)
         total_count += len(tf.y)
-        optimizer.step()
+
+        # Update end_time for the next iteration's load time measurement
+        end_time = time.time()
+        batch_times.append(end_time - start_time)
+
+    # Log average of times
+    wandb.log({
+        "epoch": epoch,
+        "data_load_time": sum(data_load_times) / len(data_load_times),
+        "device_transfer_time": sum(device_transfer_times) / len(device_transfer_times),
+        "loss_computation_time": sum(loss_computation_times) / len(loss_computation_times),
+        "backward_time": sum(backward_times) / len(backward_times),
+        "forward_time": sum(forward_times) / len(forward_times),
+        "batch_time": sum(batch_times) / len(batch_times),
+    })
+
     return loss_accum / total_count
 
 @torch.no_grad()
@@ -266,7 +322,8 @@ class TextToEmbedding:
         for key in inputs:
             if isinstance(inputs[key], Tensor):
                 inputs[key] = inputs[key].to(self.device)
-        out = self.model(**inputs)
+        with torch.no_grad():
+            out = self.model(**inputs)
         # [batch_size, max_length or batch_max_length]
         # Value is either one or zero, where zero means that
         # the token is not attended to other tokens.
@@ -373,6 +430,16 @@ def get_stype_encoder_dict(
     }
     return stype_encoder_dict
 
+class WandbStream:
+    def __init__(self, level):
+        self.level = level
+
+    def write(self, message):
+        wandb.log({self.level: message})
+
+    def flush(self):
+        pass     
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--channels", type=int, default=256)
@@ -414,7 +481,7 @@ model_batch_size = {
     "roberta-large": 16,
     "microsoft/deberta-v3-large": 8,
     "google/electra-large-discriminator": 16,
-    "sentence-transformers/all-distilroberta-v1": 128,
+    "sentence-transformers/all-distilroberta-v1": 128*4,
 }
     
 
