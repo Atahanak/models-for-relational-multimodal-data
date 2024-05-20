@@ -32,7 +32,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type, pretrain: set[PretrainType] = None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
+        def __init__(self, root, mask_type, mask, pretrain: set[PretrainType] = None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -78,10 +78,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = apply_split(self.df, self.split_type, self.splits)
 
-            maskable_columns = ['Amount Received', 'Receiving Currency', 'Amount Paid', 'Payment Currency',
-                                'Payment Format']
+            num_columns = ['Amount Received', 'Amount Paid']
+            cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            self.df["maskable_column"] = mask
             for transformation in pretrain:
-                col_to_stype = apply_transformation(self, "From ID", "To ID", maskable_columns, col_to_stype, transformation, mask_type)
+                col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
 
             col_to_stype = set_target_col(self, pretrain, col_to_stype)
 

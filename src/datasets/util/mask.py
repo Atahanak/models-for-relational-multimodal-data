@@ -8,6 +8,7 @@ from torch_geometric.sampler.neighbor_sampler import NeighborSampler
 import torch_frame
 import torch
 from icecream import ic
+from collections import Counter
 
 
 class PretrainType(Enum):
@@ -18,13 +19,14 @@ class PretrainType(Enum):
 
 def apply_transformation(self: torch_frame.data.Dataset,
                          src_column: str, dst_column: str,
-                         maskable_columns: list[str],
+                         cat_columns: list[str], num_columns: list[str],
                          col_to_stype: dict[str, torch_frame.stype],
                          transformation: PretrainType, mask_type: str) -> dict[str, torch_frame.stype]:
     if transformation == PretrainType.MASK:
-        return apply_mask(self, maskable_columns, col_to_stype, mask_type)
+        return apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
     elif transformation == PretrainType.MASK_VECTOR:
-        return apply_mask_vector(self, maskable_columns, col_to_stype)
+        return apply_mask_vector(self, cat_columns + num_columns, col_to_stype)
+        pass
     else:
         return apply_link_pred(self, src_column, dst_column, col_to_stype)
 
@@ -54,37 +56,60 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
     return col_to_stype
 
 
-def apply_mask(self: torch_frame.data.Dataset, maskable_columns: list[str],
+def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_columns: list[str],
                col_to_stype: dict[str, torch_frame.stype], mask_type: str) -> dict[str, torch_frame.stype]:
+    maskable_columns = cat_columns + num_columns
+
     def _impute_mask_vector(row: pd.Series):
-        masked_column = np.random.choice(maskable_columns)
+        # 1. Get which column we have chosen to mask
+        masked_column = row["maskable_column"]
         original_value = row[masked_column]
+        # 2. Choose a replacement from prob distribution
+        if masked_column in cat_columns:
+            # Don't select the original value
+            cat_values = list(distributions_cat[masked_column].keys())
+            p_original = distributions_cat[masked_column][original_value]
+            replacement = np.random.choice(cat_values,
+                                           p=[p + (p_original/(len(cat_values)-1)) if cat_values[i] != original_value else 0
+                                              for i, p in enumerate(distributions_cat[masked_column].values())])
+        else:
+            replacement = np.random.normal(distributions_num[masked_column][0], distributions_num[masked_column][1])
         row['mask'] = [original_value, masked_column]
-        col_ser = self.df[masked_column]
-        replacement = col_ser[col_ser != row[masked_column]].sample().values[0]  # don't include original value
         row[masked_column] = replacement
         return row
 
+    # Prepare values to impute for faster computation
+    if mask_type != "remove":
+        counter_cat = {col: Counter(self.df[col]) for col in cat_columns}
+        distributions_cat = dict()
+        for cat_column in cat_columns:
+            s = sum(counter_cat[cat_column].values())
+            distributions_cat[cat_column] = {k: v / s for k, v in counter_cat[cat_column].items()}
+        distributions_num = {col: (self.df[col].mean(), self.df[col].std()) for col in num_columns}
+
+    # Prepare values to remove for faster computation
+    if mask_type != "replace":
+        avg_per_num_col = {col: self.df[col].mean() for col in num_columns}
+
+    # Apply mask to the dataset
     self.df['mask'] = None
     if mask_type == "remove":
-        self.df = self.df.apply(_mask_column, args=(maskable_columns,), axis=1)
+        self.df = self.df.apply(_mask_column, args=(avg_per_num_col,), axis=1)
     elif mask_type == "replace":
         self.df = self.df.apply(_impute_mask_vector, axis=1)
     elif mask_type == "bert":
         def _choose_mask_type(row: pd.Series):
             p = np.random.rand()
-            if p < 0.6:
-                print("Masking")
-                return _mask_column(row, maskable_columns)
-            elif p < 0.8:
-                print("Imputing")
+            if p < 0.8:
+                return _mask_column(row, avg_per_num_col)
+            elif p < 0.9:
                 return _impute_mask_vector(row)
             else:
-                print("Doing nothing")
-                mask_column = np.random.choice(maskable_columns)
+                mask_column = row["maskable_column"]
                 original_value = row[mask_column]
                 row['mask'] = [original_value, mask_column]
                 return row
+
         self.df = self.df.apply(_choose_mask_type, axis=1)
 
     col_to_stype['mask'] = torch_frame.mask
@@ -93,8 +118,6 @@ def apply_mask(self: torch_frame.data.Dataset, maskable_columns: list[str],
 
 def apply_mask_vector(self: torch_frame.data.Dataset, maskable_columns: list[str],
                       col_to_stype: dict[str, torch_frame.stype], p_m: float = 0.4):
-    # TODO: implement mask vector transformation, by (1) generating a random vector of 0s and 1s and
-    #  (2) imputing the "masked" values from the distribution of the selected column
     self.df['mask_vector'] = None
 
     # Helper function to impute masked values from the column's distribution
@@ -105,7 +128,6 @@ def apply_mask_vector(self: torch_frame.data.Dataset, maskable_columns: list[str
             original_value_col_pairs.append([row[mask_column], mask_column])
             col_ser = self.df[mask_column]
             replacement = col_ser[col_ser != row[mask_column]].sample().values[0]
-            # print("Changed value from ", row[mask_column], " to ", replacement, " in column ", mask_column)
             row[mask_column] = replacement
         # Store two vectors to predict: the previous values (reconstruction) and mask vector (mask prediction)
         row['mask_vector'] = original_value_col_pairs
@@ -150,15 +172,15 @@ def apply_link_pred(self: torch_frame.data.Dataset,
 
 
 # Randomly mask a column of each row and store original value and max index
-def _mask_column(row: pd.Series, maskable_cols):
-    col_to_mask = np.random.choice(maskable_cols)  # Choose a column randomly
+def _mask_column(row: pd.Series, avg_per_num_col):
+    col_to_mask = row["maskable_column"]  # Choose a column randomly
     original_value = row[col_to_mask]
     row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
 
     # row[col_to_mask] = np.nan
     # hack to escape nan error in torch_frame
-    if col_to_mask in ['Amount Received', 'Amount Paid']:
-        row[col_to_mask] = -1
+    if col_to_mask in avg_per_num_col.keys():
+        row[col_to_mask] = avg_per_num_col[col_to_mask]
     else:
         row[col_to_mask] = '[MASK]'
     return row
