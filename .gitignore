@@ -163,3 +163,9 @@ wandb/
 
 *.out
 *.err
+
+checkpoints/
+results/
+scripts/
+fa_st1/
+fa_st2/

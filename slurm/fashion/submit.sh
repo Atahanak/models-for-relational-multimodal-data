@@ -2,15 +2,18 @@
 
 # Parameters
 name="fashion"
-nrows=10000
-batch_size=128
+nrows=100000
+batch_size=300
 batch_size_embedder=5
-batch_size_tokenizer=20000
-epochs=100
+batch_size_tokenizer=50000
+epochs=50
 finetune=true
+cpus_per_task=15
+mem_per_cpu=8GB
+time="4:00:00"
 
 # Construct the job name dynamically
-job_name="${name}_nrows${nrows}_bs${batch_size}_bsemb${batch_size_embedder}_bstok${batch_size_tokenizer}_epochs${epochs}_finetune${finetune}"
+job_name="${name}_nrows${nrows}_bs${batch_size}_bsemb${batch_size_embedder}_bstok${batch_size_tokenizer}_epochs${epochs}_finetune${finetune}_cpus${cpus_per_task}_mem${mem_per_cpu}"
 
 # Path for the generated SLURM script
 generated_script_path="/home/$USER/cse3000/slurm/fashion/${job_name}.sh"
@@ -20,12 +23,12 @@ cat <<EOT > $generated_script_path
 #!/bin/bash
 
 #SBATCH --job-name="$job_name"
-#SBATCH --time=1:00:00
+#SBATCH --time=$time
 #SBATCH --ntasks=1
 #SBATCH --partition=gpu-a100
-#SBATCH --mem-per-cpu=8GB
+#SBATCH --mem-per-cpu=$mem_per_cpu
 #SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=15    
+#SBATCH --cpus-per-task=$cpus_per_task
 #SBATCH --account=education-eemcs-courses-cse3000
 #SBATCH --output=/home/%u/cse3000/slurm/fashion/%x_%j.out
 #SBATCH --error=/home/%u/cse3000/slurm/fashion/%x_%j.err
