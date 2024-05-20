@@ -48,16 +48,7 @@ class SelfSupervisedMVHead(Module):
 
     def __init__(self, channels: int, num_numerical: int, num_categorical: list[int]) -> None:
         super().__init__()
-        self.num_decoder = Sequential(
-            LayerNorm(channels),
-            ReLU(),
-            Linear(channels, num_numerical),
-        )
-        self.cat_decoder = ModuleList([Sequential(
-            LayerNorm(channels),
-            ReLU(),
-            Linear(channels, num_classes),
-        ) for num_classes in num_categorical])
+        self.mcm_decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
         self.mask_vector_decoder = Sequential(
             LayerNorm(channels),
             ReLU(),
@@ -66,13 +57,7 @@ class SelfSupervisedMVHead(Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        for m in self.num_decoder:
-            if not isinstance(m, ReLU):
-                m.reset_parameters()
-        for m in self.cat_decoder:
-            for n in m:
-                if not isinstance(n, ReLU):
-                    n.reset_parameters()
+        self.mcm_decoder.reset_parameters()
         for m in self.mask_vector_decoder:
             if not isinstance(m, ReLU):
                 m.reset_parameters()
@@ -87,8 +72,7 @@ class SelfSupervisedMVHead(Module):
             tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]: Numerical and categorical
             outputs, and the prediction of the mask vector.
         """
-        num_out = self.num_decoder(x_cls)
-        cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
+        num_out, cat_out = self.mcm_decoder(x_cls)
         mv_out = self.mask_vector_decoder(x_cls)
         return num_out, cat_out, mv_out
 

@@ -51,15 +51,16 @@ class SSMetric:
 
         return mrr, hits_dict
 
-    def mv_accuracy(self, pred, y, tol=0.1):
-        num_out, cat_out, mv_out = pred
-        mask_acc = cat_acc = num_rmse = 0
-        total = 0
+    def mv_accuracy(self, mv_out, y, tol=0.1):
+        mask_acc = total = 0
         for i, (values, mask_vector) in enumerate(y):
-            # Calc accuracy of the mask vector prediction (tolerance of += 0.2)
-            for p, r in zip(mv_out[i], mask_vector):
-                mask_acc += 1 if (r == 1 and p > 1 - tol) or (r == 0 and p < tol) else 0
-                total += 1
+            # Did mv_out predict the correct mask vector?
+            mask_acc += 1 if torch.argmax(mv_out[i]) == mask_vector else 0
+            total += 1
+            # for j, p in enumerate(mv_out[i]):
+            #     r = 1 if j == mask_vector else 0
+            #     mask_acc += 1 if ((r == 1 and p > 1 - tol) or (r == 0 and p < tol)) else 0
+            #     total += 1
         return mask_acc / total
 
 

@@ -87,10 +87,10 @@ class FTTransformer(Module):
             num_numerical = len(col_names_dict[stype.numerical])
             num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
 
-            if PretrainType.MASK in pretrain:
-                self.decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
-            else:
+            if PretrainType.MASK_VECTOR in pretrain:
                 self.decoder = SelfSupervisedMVHead(channels, num_numerical, num_categorical)
+            else:
+                self.decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
             # self.num_decoder = Sequential(
             #     LayerNorm(channels),
             #     ReLU(),

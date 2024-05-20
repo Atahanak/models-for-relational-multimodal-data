@@ -25,8 +25,9 @@ def apply_transformation(self: torch_frame.data.Dataset,
     if transformation == PretrainType.MASK:
         return apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
     elif transformation == PretrainType.MASK_VECTOR:
-        return apply_mask_vector(self, cat_columns + num_columns, col_to_stype)
-        pass
+        return col_to_stype
+        # no need to do anything, as we already store all necessary information in the mask column
+        # return apply_mask_vector(self, col_to_stype)
     else:
         return apply_link_pred(self, src_column, dst_column, col_to_stype)
 
@@ -48,8 +49,6 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.target_col = 'mask'
     elif PretrainType.LINK_PRED in pretrain:
         self.target_col = 'link'
-    elif PretrainType.MASK_VECTOR in pretrain:
-        self.target_col = 'mask_vector'
     else:
         col_to_stype['Is Laundering'] = torch_frame.categorical
         self.target_col = 'Is Laundering'
@@ -116,25 +115,13 @@ def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_colum
     return col_to_stype
 
 
-def apply_mask_vector(self: torch_frame.data.Dataset, maskable_columns: list[str],
-                      col_to_stype: dict[str, torch_frame.stype], p_m: float = 0.4):
-    self.df['mask_vector'] = None
-
-    # Helper function to impute masked values from the column's distribution
-    def _impute_mask_vector(row: pd.Series):
-        mask_vector = _generate_mask_vector(maskable_columns, p_m)
-        original_value_col_pairs = []
-        for mask_column in mask_vector:
-            original_value_col_pairs.append([row[mask_column], mask_column])
-            col_ser = self.df[mask_column]
-            replacement = col_ser[col_ser != row[mask_column]].sample().values[0]
-            row[mask_column] = replacement
-        # Store two vectors to predict: the previous values (reconstruction) and mask vector (mask prediction)
-        row['mask_vector'] = original_value_col_pairs
-        return row
-    col_to_stype['mask_vector'] = torch_frame.mask_vector
-    self.df = self.df.apply(_impute_mask_vector, axis=1)
-    return col_to_stype
+# This can be infered by the mask column
+# def apply_mask_vector(self: torch_frame.data.Dataset,
+#                       col_to_stype: dict[str, torch_frame.stype], p_m: float = 0.4):
+#     self.df['mask_vector'] = self.df["maskable_column"]
+#     self.df['mask_vector'] = self.df['mask_vector'].apply(lambda x: [x])   # hack to allow for lists in the future
+#     col_to_stype['mask_vector'] = torch_frame.mask_vector
+#     return col_to_stype
 
 
 def apply_link_pred(self: torch_frame.data.Dataset,
