@@ -26,7 +26,7 @@ from src.utils.loss import lp_loss
 from src.utils.metric import mrr
 
 from tqdm import tqdm
-# import wandb
+import wandb
 from icecream import ic
 import sys
 
@@ -83,21 +83,21 @@ torch.backends.cudnn.benchmark = False
 os.environ["PYTHONHASHSEED"] = str(seed)
 
 # %%
-# wandb.login()
-# run = wandb.init(
-#     dir="/mnt/data/",
-#     mode="disabled" if args['testing'] else "online",
-#     project=f"rel-mm-2", 
-#     #name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
-#     name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
-#     config=args
-# )
+wandb.login()
+run = wandb.init(
+    dir="/mnt/data/",
+    mode="disabled" if args['testing'] else "online",
+    project=f"rel-mm-2", 
+    #name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
+    name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
+    config=args
+)
 
 # %%
 dataset = IBMTransactionsAML(
     # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/home/dragomir/Downloads/dummy-10k-random-c.csv', 
+    root='/scratch/ddrashkov/dataset/HI-Small_Trans-c.csv', 
     pretrain=pretrain, 
     split_type=split_type, 
     splits=data_split, 
@@ -255,7 +255,7 @@ def train(epoc: int, model, optimizer) -> float:
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
             del pred
             del tf
-            # wandb.log({"train_loss_lp": loss_accum/total_count})
+            wandb.log({"train_loss_lp": loss_accum/total_count})
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
@@ -291,22 +291,22 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 hits5=f'{np.mean(hits5):.4f}',
                 hits10=f'{np.mean(hits10):.4f}'
             )
-            # wandb.log({
-            #     f"{dataset_name}_loss": loss_accum/total_count,
-            # })
+            wandb.log({
+                f"{dataset_name}_loss": loss_accum/total_count,
+            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
         hits5 = np.mean(hits5)
         hits10 = np.mean(hits10)
-        # wandb.log({
-        #     f"{dataset_name}_loss": loss_accum/total_count,
-        #     f"{dataset_name}_mrr": mrr_score,
-        #     f"{dataset_name}_hits@1": hits1,
-        #     f"{dataset_name}_hits@2": hits2,
-        #     f"{dataset_name}_hits@5": hits5,
-        #     f"{dataset_name}_hits@10": hits10
-        # })
+        wandb.log({
+            f"{dataset_name}_loss": loss_accum/total_count,
+            f"{dataset_name}_mrr": mrr_score,
+            f"{dataset_name}_hits@1": hits1,
+            f"{dataset_name}_hits@2": hits2,
+            f"{dataset_name}_hits@5": hits5,
+            f"{dataset_name}_hits@10": hits10
+        })
         del tf
         del pred
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
@@ -329,7 +329,7 @@ model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 ic(learnable_params)
-# wandb.log({"learnable_params": learnable_params})
+wandb.log({"learnable_params": learnable_params})
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
@@ -362,6 +362,6 @@ for epoch in range(1, epochs + 1):
     )
 
 # %%
-# wandb.finish()
+wandb.finish()
 
 
