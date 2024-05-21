@@ -4,28 +4,21 @@ import os
 import time
 from typing import Any
 
-import numpy as np
-import pandas as pd
 import torch
-import torch.nn.functional as F
-from datasets import Dataset, load_dataset
 from icecream import ic
 from peft import LoraConfig, get_peft_model
 from peft import TaskType as peftTaskType
 from torch import Tensor
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
+from torch.nn import Module, MSELoss
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
-from torchmetrics import AUROC, Accuracy, MeanSquaredError
+from torchmetrics import MeanSquaredError
 from tqdm import tqdm
-from transformers import (AutoModel, AutoModelForSequenceClassification,
-                          AutoTokenizer, DataCollatorWithPadding, Trainer,
-                          TrainingArguments)
+from transformers import (AutoModel, AutoTokenizer)
 import evaluate
 import torch_frame
 from torch_frame.config import ModelConfig
 from torch_frame.config.text_embedder import TextEmbedderConfig
-from torch_frame.config.text_tokenizer import TextTokenizerConfig
 from torch_frame.data import DataLoader, MultiNestedTensor
 from torch_frame.nn import (EmbeddingEncoder, FTTransformer,
                             LinearEmbeddingEncoder, LinearEncoder,
@@ -59,9 +52,6 @@ def use_llm(args):
         "text_stype": text_stype,
         "col_to_text_embedder_cfg": TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.st2_batch_size_embedder),
     }
-    ic(args.task_type)
-    tt = TaskType(args.task_type)
-    ic(tt)
     dataset = Custom_Dataset(
         root=args.root, 
         task_type=TaskType(args.task_type),
@@ -207,7 +197,6 @@ def train(
         
         start_loss_time = time.time()
         loss = loss_fun(pred, y)
-        ic(loss, loss.dtype)
         loss_computation_time = time.time() - start_loss_time
 
         # Backward pass

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Parameters
-name="fa_st1"
+name="st1"
 nrows=100000
 batch_size=300
 batch_size_embedder=5
@@ -13,8 +13,8 @@ st1_epochs=10
 st1_lora_alpha=1
 st1_lora_dropout=0.1
 st1_r=8
-st1_per_device_train_batch_size=64
-st1_per_device_eval_batch_size=64
+st1_per_device_train_batch_size=128
+st1_per_device_eval_batch_size=128
 st1_learning_rate=2e-5
 st1_weight_decay=0.01
 gpu=true
@@ -24,7 +24,7 @@ text_model="sentence-transformers/all-distilroberta-v1"
 
 
 # Construct the job name dynamically, append gpu to the job name if GPU is used
-job_name="${name}_nrows${nrows}_s1bs${st1_per_device_train_batch_size}_st1epochs${st1_epochs}_st1r${st1_r}_cpus${cpus_per_task}_mem${mem_per_cpu}" 
+job_name="${name}_rows${nrows}_bs-emb${st1_per_device_train_batch_size}_ep${st1_epochs}_r${st1_r}_cpus${cpus_per_task}_mem${mem_per_cpu}" 
 if [ $gpu == true ]; then
     job_name="${job_name}_gpu"
 fi
@@ -52,7 +52,7 @@ module load miniconda3
 unset CONDA_SHLVL
 source "\$(conda info --base)/etc/profile.d/conda.sh"
 
-conda activate rel-mm-clean
+conda activate rel-mm
 
 # Run the Python script with the specified parameters
 srun python /home/$USER/cse3000/s1.py --name=$job_name --nrows=$nrows --batch_size=$batch_size --batch_size_embedder=$batch_size_embedder --batch_size_tokenizer=$batch_size_tokenizer --epochs=$epochs --text_model=$text_model --task_type="regression" --st1_per_device_train_batch_size=$st1_per_device_train_batch_size --st1_per_device_eval_batch_size=$st1_per_device_eval_batch_size $([ $finetune == true ] && echo "--finetune") --st1_epochs=$st1_epochs --st1_lora_alpha=$st1_lora_alpha --st1_lora_dropout=$st1_lora_dropout --st1_r=$st1_r --st1_learning_rate=$st1_learning_rate --st1_weight_decay=$st1_weight_decay
