@@ -21,7 +21,6 @@ from tqdm import tqdm
 from transformers import (AutoModel, AutoModelForSequenceClassification,
                           AutoTokenizer, DataCollatorWithPadding, Trainer,
                           TrainingArguments)
-
 import evaluate
 import torch_frame
 from torch_frame.config import ModelConfig
@@ -33,35 +32,57 @@ from torch_frame.nn import (EmbeddingEncoder, FTTransformer,
                             LinearModelEncoder,
                             MultiCategoricalEmbeddingEncoder, StypeEncoder)
 from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
-from torch_frame.typing import TextTokenizationOutputs, TaskType as TTT
+from torch_frame.typing import TextTokenizationOutputs, TaskType
 from src import Custom_Dataset
 import wandb
-
+from icecream import ic
 
 
 
 def use_llm(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    ########### Wandb Setup ############
+    wandb.login()
+    run = wandb.init(
+        mode="disabled" if args.testing else "online",
+        project=f"rel-mm", 
+        name=args.name,
+        config=args
+    )
+    script_path = "/home/cgriu/cse3000/slurm/separate/scripts/"+args.name+".sh"
+    wandb.save(script_path)
+
     text_encoder = TextToEmbedding(model=args.text_model, device=device)
     text_stype = torch_frame.text_embedded
     kwargs = {
         "text_stype": text_stype,
-        "col_to_text_embedder_cfg": TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.batch_size_embedder),
+        "col_to_text_embedder_cfg": TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.st2_batch_size_embedder),
     }
+    ic(args.task_type)
+    tt = TaskType(args.task_type)
+    ic(tt)
     dataset = Custom_Dataset(
         root=args.root, 
-        task_type=TTT(args.task_type),
+        task_type=TaskType(args.task_type),
         nrows=args.nrows,
         **kwargs)
     
     dataset.materialize()
     train_dataset, val_dataset, test_dataset = dataset.split()
 
+    train_dataset_tensor = train_dataset.tensor_frame
+    val_dataset_tensor = val_dataset.tensor_frame
+    test_dataset_tensor = test_dataset.tensor_frame
+    train_loader = DataLoader(train_dataset_tensor, batch_size=args.st2_batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset_tensor, batch_size=args.st2_batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset_tensor, batch_size=args.st2_batch_size, shuffle=False)
+
     out_channels = 1
     loss_fun = MSELoss()
     metric_computer = MeanSquaredError(squared=False).to(device)
+    higher_is_better = False
 
-    # Define model
     model = FTTransformer(
         channels=args.channels,
         out_channels=out_channels,
@@ -83,56 +104,201 @@ def use_llm(args):
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = ExponentialLR(optimizer, gamma=args.gamma_rate)
 
+    main_torch(higher_is_better, args, model, train_loader,
+                   val_loader, test_loader, lr_scheduler, optimizer, dataset.task_type, loss_fun, metric_computer, device)
 
-    # Define TrainingArguments
-    training_args = TrainingArguments(
-        output_dir='./results',
-        evaluation_strategy="steps",
-        eval_steps=5,
-        logging_steps=1,
-        save_steps=1000,
-        save_total_limit=3,
-        learning_rate=args.lr,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
-        num_train_epochs=args.st2_epochs,
-        warmup_steps=500,
-        weight_decay=0.01,
-        logging_dir='./logs',
-        fp16=True,
-    )
 
-    # Define compute metrics function
-    def compute_metrics(eval_pred):
-        predictions, labels = eval_pred
-        predictions = torch.tensor(predictions).to(device)
-        labels = torch.tensor(labels).to(device)
-        metric_computer.update(predictions, labels)
-        result = metric_computer.compute()
-        metric_computer.reset()
-        return {"mse": result.item()}
 
-    # Create Trainer instance
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        tokenizer=None,  # Adjust if necessary
-        data_collator=None,  # Adjust if necessary
-        optimizers=(optimizer, lr_scheduler),
-        compute_metrics=compute_metrics,
-    )
+def main_torch(
+    higher_is_better: bool,
+    args: argparse.Namespace,
+    model: Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    lr_scheduler: Any,
+    optimizer: Any,
+    task_type: TaskType,
+    loss_fun: Any,
+    metric_computer: Any,
+    device: torch.device,
+):
+    start_time = time.time()
+    if higher_is_better:
+        best_val_metric = 0
+    else:
+        best_val_metric = math.inf
 
-    # Train and evaluate the model
-    trainer.train()
-    trainer.evaluate(eval_dataset=val_dataset)
+    for epoch in range(1, args.st2_epochs + 1):
+        train_loss = train(model, train_loader, optimizer, epoch, loss_fun, device, task_type)
+        val_metric = test(model, val_loader, metric_computer, device, task_type)
+        wandb.log({f"train_loss": train_loss, f"val_metric": val_metric})
+        if higher_is_better:
+            if val_metric > best_val_metric:
+                best_val_metric = val_metric
+                best_test_metric = test(model, test_loader, metric_computer, device, task_type)
+        else:
+            if val_metric < best_val_metric:
+                best_val_metric = val_metric
+                best_test_metric = test(model, test_loader, metric_computer, device, task_type)
+        lr_scheduler.step()
+        print(f'Train Loss: {train_loss:.4f}, Val: {val_metric:.4f}')
+
+    end_time = time.time()
+    result_dict = {
+        'args': args.__dict__,
+        'best_val_metric': best_val_metric,
+        'best_test_metric': best_test_metric,
+        'total_time': end_time - start_time,
+    }
+    print(result_dict)
+    # Save results
+    if args.result_path != '':
+        os.makedirs(os.path.dirname(args.result_path), exist_ok=True)
+        torch.save(result_dict, args.result_path)
+
+
+def train(
+    model: Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    loss_fun: Any,
+    device: torch.device,
+    task_type: TaskType,
+) -> float:
+    model.train()
+    loss_accum = total_count = 0
+
+    # Lists to store time measurements
+    data_load_times = []
+    device_transfer_times = []
+    loss_computation_times = []
+    backward_times = []
+    forward_times = []
+    batch_times = []
+
+    # Start initial time before the loop begins
+    end_time = time.time()
+
+    for tf in tqdm(loader, desc=f"Epoch: {epoch}"):
+        # Calculate data load time from the end of the previous iteration
+        start_time = time.time()
+        data_load_time = start_time - end_time
+
+        # Time to transfer data to device
+        start_transfer_time = time.time()
+        tf = tf.to(device)
+        y = tf.y
+        device_transfer_time = time.time() - start_transfer_time
+
+        # Forward pass and loss computation\
+        start_forward_time = time.time()
+        pred = model(tf)
+        forward_time = time.time() - start_forward_time
+
+        if pred.size(1) == 1:
+            pred = pred.view(-1, )
+
+        if task_type == TaskType.BINARY_CLASSIFICATION:
+            y = y.to(torch.float)
+        elif task_type == TaskType.REGRESSION:
+            y = y.to(torch.float)
+        
+        start_loss_time = time.time()
+        loss = loss_fun(pred, y)
+        ic(loss, loss.dtype)
+        loss_computation_time = time.time() - start_loss_time
+
+        # Backward pass
+        start_backward_time = time.time()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        backward_time = time.time() - start_backward_time
+
+        # Record times
+        data_load_times.append(data_load_time)
+        device_transfer_times.append(device_transfer_time)
+        loss_computation_times.append(loss_computation_time)
+        backward_times.append(backward_time)
+        forward_times.append(forward_time)
+
+        # Accumulate loss for average calculation
+        loss_accum += float(loss.item()) * len(tf.y)
+        total_count += len(tf.y)
+
+        # Update end_time for the next iteration's load time measurement
+        end_time = time.time()
+        batch_times.append(end_time - start_time)
+
+    # Log average of times
+    wandb.log({
+        "epoch": epoch,
+        "data_load_time": sum(data_load_times) / len(data_load_times),
+        "device_transfer_time": sum(device_transfer_times) / len(device_transfer_times),
+        "loss_computation_time": sum(loss_computation_times) / len(loss_computation_times),
+        "backward_time": sum(backward_times) / len(backward_times),
+        "forward_time": sum(forward_times) / len(forward_times),
+        "batch_time": sum(batch_times) / len(batch_times),
+    })
+
+    return loss_accum / total_count
+
+@torch.no_grad()
+def test(
+    model: Module,
+    loader: DataLoader,
+    metric_computer: Any,
+    device: torch.device,
+    task_type: TaskType,
+) -> float:
+    model.eval()
+    metric_computer.reset()
+    for tf in loader:
+        tf = tf.to(device)
+        pred = model(tf)
+        if task_type == TaskType.MULTICLASS_CLASSIFICATION:
+            pred = pred.argmax(dim=-1)
+        elif task_type == TaskType.REGRESSION:
+            pred = pred.view(-1, )
+        metric_computer.update(pred, tf.y)
+    return metric_computer.compute().item()
+
+class TextToEmbedding:
+    def __init__(self, model: str, device: torch.device):
+        self.model_name = model
+        self.device = device
+        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        self.model = AutoModel.from_pretrained(model).to(device)
+        embedding_model_learnable_params = sum( p.numel() for p in self.model.parameters() if p.requires_grad)
+        ic(embedding_model_learnable_params)
+    def __call__(self, sentences: list[str]) -> Tensor:
+        inputs = self.tokenizer(
+            sentences,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+        )
+        for key in inputs:
+            if isinstance(inputs[key], Tensor):
+                inputs[key] = inputs[key].to(self.device)
+        with torch.no_grad():
+            out = self.model(**inputs)
+        # [batch_size, max_length or batch_max_length]
+        # Value is either one or zero, where zero means that
+        # the token is not attended to other tokens.
+        mask = inputs["attention_mask"]
+        return (mean_pooling(out.last_hidden_state.detach(),
+                             mask).squeeze(1).cpu())
+
 
 def main():
     args = parse_args()
-    # finetune_llm(args)
     use_llm(args)
     return
+
+        
 
 class TextToEmbedding:
     def __init__(self, model: str, device: torch.device):
@@ -265,11 +431,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--channels", type=int, default=256)
     parser.add_argument("--num_layers", type=int, default=4)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--batch_size_tokenizer", type=int, default=10000)
-    parser.add_argument("--batch_size_embedder", type=int, default=1024)
     parser.add_argument("--lr", type=float, default=0.0001)
-    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--compile", type=bool, default=False)
     parser.add_argument("--testing", type=bool, default=False)
@@ -280,21 +442,15 @@ def parse_args():
         choices=[
             "binary_classification", "multiclass_classification", "regression"
         ],
-        default="multiclass_classification",)    
+        default="regression",)    
     parser.add_argument("--pos_weight", type=bool, default=False)
     parser.add_argument("--gamma_rate", type=float, default=0.9)
     parser.add_argument("--text_model", type=str, default="sentence-transformers/all-distilroberta-v1")
     parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
     parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
-    parser.add_argument("--st1_epochs", type=int, default=10)
-    parser.add_argument("--st1_lora_alpha", type=int, default=1)
-    parser.add_argument("--st1_lora_dropout", type=float, default=0.1)
-    parser.add_argument("--st1_r", type=int, default=8)
-    parser.add_argument("--st1_per_device_train_batch_size", type=int, default=8)
-    parser.add_argument("--st1_per_device_eval_batch_size", type=int, default=8)
-    parser.add_argument("--st1_learning_rate", type=float, default=2e-5)
-    parser.add_argument("--st1_weight_decay", type=float, default=0.01)
     parser.add_argument("--st2_epochs", type=int, default=10)
+    parser.add_argument("--st2_batch_size_embedder", type=int, default=5)
+    parser.add_argument("--st2_batch_size", type=int, default=256)
 
     return parser.parse_args()
 

@@ -86,7 +86,6 @@ def main():
     dataset.materialize()
     train_dataset, val_dataset, test_dataset = dataset.split()
 
-    # Set up data loaders
     train_tensor_frame = train_dataset.tensor_frame
     val_tensor_frame = val_dataset.tensor_frame
     test_tensor_frame = test_dataset.tensor_frame

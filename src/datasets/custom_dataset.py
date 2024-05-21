@@ -11,7 +11,7 @@ from icecream import ic
 class Custom_Dataset(torch_frame.data.Dataset):
         _dataset_stype_to_col = {
             'amazon_fashion': {
-                torch_frame.categorical: ['overall'],
+                torch_frame.numerical: ['overall'],
                 torch_frame.text_embedded: ['reviewText']
                 # overall             int64
                 # verified             bool
