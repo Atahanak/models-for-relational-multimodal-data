@@ -48,24 +48,16 @@ def main():
         name=args.name,
         config=args
     )
-    script_path = "/home/cgriu/cse3000/slurm/fashion/"+args.name+".sh"
+    script_path = "/home/cgriu/cse3000/slurm/one_step/scripts/"+args.name+".sh"
     wandb.save(script_path)
 
-    if not args.finetune:
-        text_encoder = TextToEmbedding(model=args.text_model, device=device)
-        text_stype = torch_frame.text_embedded
-        kwargs = {
-            "text_stype": text_stype,
-            "col_to_text_embedder_cfg": TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.batch_size_embedder),
-        }
-    else:
-        text_encoder = TextToEmbeddingFinetune(model=args.text_model)
-        text_stype = torch_frame.text_tokenized
-        kwargs = {
-            "text_stype": text_stype,
-            "col_to_text_tokenizer_cfg": TextTokenizerConfig(text_tokenizer=text_encoder.tokenize,
-                                batch_size=args.batch_size_tokenizer),
-        }
+    text_encoder = TextToEmbeddingFinetune(model=args.text_model, args=args)
+    text_stype = torch_frame.text_tokenized
+    kwargs = {
+        "text_stype": text_stype,
+        "col_to_text_tokenizer_cfg": TextTokenizerConfig(text_tokenizer=text_encoder.tokenize,
+                            batch_size=args.batch_size_tokenizer),
+    }
 
     dataset = Custom_Dataset(
         root=args.root, 
@@ -99,29 +91,11 @@ def main():
         "test_loader size": len(test_loader)
     })
 
-
-    # Define loss function and metric
-    if dataset.task_type == TaskType.BINARY_CLASSIFICATION:
-        out_channels = 1
-        if args.pos_weight:
-            label_imbalance = sum(train_tensor_frame.y) / len(
-                train_tensor_frame.y)
-            loss_fun = BCEWithLogitsLoss(pos_weight=1 / label_imbalance)
-        else:
-            loss_fun = BCEWithLogitsLoss()
-        metric_computer = AUROC(task='binary').to(device)
-        higher_is_better = True
-    elif dataset.task_type == TaskType.MULTICLASS_CLASSIFICATION:
-        out_channels = dataset.num_classes
-        loss_fun = CrossEntropyLoss()
-        metric_computer = Accuracy(task='multiclass',
-                                   num_classes=dataset.num_classes).to(device)
-        higher_is_better = True
-    elif dataset.task_type == TaskType.REGRESSION:
-        out_channels = 1
-        loss_fun = MSELoss()
-        metric_computer = MeanSquaredError(squared=False).to(device)
-        higher_is_better = False
+    # dataset.task_type == TaskType.REGRESSION:
+    out_channels = 1
+    loss_fun = MSELoss()
+    metric_computer = MeanSquaredError(squared=False).to(device)
+    higher_is_better = False
 
     # Define model
     model = FTTransformer(
@@ -137,11 +111,8 @@ def main():
     model.reset_parameters()  
     model = torch.compile(model, dynamic=True) if args.compile else model
     learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    ic(learnable_params)
-    # print estimated size of the model
     model_size = sum(p.numel() for p in model.parameters())
-    ic(model_size)
-    wandb.log({"learnable_params": learnable_params})
+    ic(learnable_params, model_size)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = ExponentialLR(optimizer, gamma=args.gamma_rate)
 
@@ -243,6 +214,8 @@ def train(
 
         if task_type == TaskType.BINARY_CLASSIFICATION:
             y = y.to(torch.float)
+        elif task_type == TaskType.REGRESSION:
+            y = y.to(torch.float)
         
         start_loss_time = time.time()
         loss = loss_fun(pred, y)
@@ -303,34 +276,6 @@ def test(
         metric_computer.update(pred, tf.y)
     return metric_computer.compute().item()
 
-class TextToEmbedding:
-    def __init__(self, model: str, device: torch.device):
-        self.model_name = model
-        self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = AutoModel.from_pretrained(model).to(device)
-        embedding_model_learnable_params = sum( p.numel() for p in self.model.parameters() if p.requires_grad)
-        ic(embedding_model_learnable_params)
-    def __call__(self, sentences: list[str]) -> Tensor:
-        inputs = self.tokenizer(
-            sentences,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt",
-        )
-        for key in inputs:
-            if isinstance(inputs[key], Tensor):
-                inputs[key] = inputs[key].to(self.device)
-        with torch.no_grad():
-            out = self.model(**inputs)
-        # [batch_size, max_length or batch_max_length]
-        # Value is either one or zero, where zero means that
-        # the token is not attended to other tokens.
-        mask = inputs["attention_mask"]
-        return (mean_pooling(out.last_hidden_state.detach(),
-                             mask).squeeze(1).cpu())
-
-
 class TextToEmbeddingFinetune(torch.nn.Module):
     r"""Include :obj:`tokenize` that converts text data to tokens, and
     :obj:`forward` function that converts tokens to embeddings with a
@@ -344,7 +289,7 @@ class TextToEmbeddingFinetune(torch.nn.Module):
             such as :obj:`distilbert-base-uncased` and
             :obj:`sentence-transformers/all-distilroberta-v1`.
     """
-    def __init__(self, model: str):
+    def __init__(self, model: str, args: argparse.Namespace):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.model = AutoModel.from_pretrained(model)
@@ -358,12 +303,12 @@ class TextToEmbeddingFinetune(torch.nn.Module):
 
         peft_config = LoraConfig(
             task_type=peftTaskType.FEATURE_EXTRACTION,
-            r=32,
-            lora_alpha=32,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
             inference_mode=False,
-            lora_dropout=0.1,
+            lora_dropout=args.lora_dropout,
             bias="none",
-            target_modules=target_modules,
+            # target_modules=target_modules,
         )
         self.model = get_peft_model(self.model, peft_config)
         self.model.print_trainable_parameters()
@@ -404,19 +349,17 @@ def get_stype_encoder_dict(
     train_tensor_frame: torch_frame.TensorFrame,
     args: argparse.Namespace,
 ) -> dict[torch_frame.stype, StypeEncoder]:
-    if not args.finetune:
-        text_stype_encoder = LinearEmbeddingEncoder()
-    else:
-        model_cfg = ModelConfig(
-            model=text_encoder,
-            out_channels=model_out_channels[args.text_model])
-        col_to_model_cfg = {
-            col_name: model_cfg
-            for col_name in train_tensor_frame.col_names_dict[
-                torch_frame.text_tokenized]
-        }
-        text_stype_encoder = LinearModelEncoder(
-            col_to_model_cfg=col_to_model_cfg)
+
+    model_cfg = ModelConfig(
+        model=text_encoder,
+        out_channels=768)#model_out_channels[args.text_model])
+    col_to_model_cfg = {
+        col_name: model_cfg
+        for col_name in train_tensor_frame.col_names_dict[
+            torch_frame.text_tokenized]
+    }
+    text_stype_encoder = LinearModelEncoder(
+        col_to_model_cfg=col_to_model_cfg)
 
     stype_encoder_dict = {
         torch_frame.categorical: EmbeddingEncoder(),
@@ -428,16 +371,6 @@ def get_stype_encoder_dict(
         torch_frame.timestamp: TimestampEncoder()
     }
     return stype_encoder_dict
-
-class WandbStream:
-    def __init__(self, level):
-        self.level = level
-
-    def write(self, message):
-        wandb.log({self.level: message})
-
-    def flush(self):
-        pass     
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -464,6 +397,10 @@ def parse_args():
     parser.add_argument("--text_model", type=str, default="sentence-transformers/all-distilroberta-v1")
     parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
     parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
+    parser.add_argument("--lora_alpha", type=int, default=1)
+    parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_dropout", type=float, default=0.1)
+
     return parser.parse_args()
 
 model_out_channels = {

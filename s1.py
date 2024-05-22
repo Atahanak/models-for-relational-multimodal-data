@@ -1,7 +1,6 @@
 import argparse
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -18,15 +17,11 @@ from transformers import (AutoModel, AutoModelForSequenceClassification,
 import evaluate
 import torch_frame
 from torch_frame.config import ModelConfig
-from torch_frame.data import MultiNestedTensor
 from torch_frame.nn import (EmbeddingEncoder,
                             LinearEmbeddingEncoder, LinearEncoder,
                             LinearModelEncoder,
                             MultiCategoricalEmbeddingEncoder, StypeEncoder)
 from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
-from torch_frame.typing import TextTokenizationOutputs
-
-
 
 
 def read_dataset(args):
@@ -61,17 +56,17 @@ def finetune_llm(args):
 
     lora_config = LoraConfig(
         task_type=peftTaskType.SEQ_CLS, 
-        r=args.st1_r, 
-        lora_alpha=args.st1_lora_alpha, 
+        r=args.lora_r, 
+        lora_alpha=args.lora_alpha, 
         inference_mode=False, 
-        lora_dropout=args.st1_lora_dropout
+        lora_dropout=args.lora_dropout
     )
     model = get_peft_model(model, lora_config)  
     print(model.state_dict().keys())  
 
     data_collator = DataCollatorWithPadding(tokenizer)
     training_args = TrainingArguments(
-        output_dir="./checkpoints",
+        output_dir=args.checkpoint_dir,
         evaluation_strategy="epoch",
         learning_rate=args.st1_learning_rate,
         per_device_train_batch_size=args.st1_per_device_train_batch_size,
@@ -140,66 +135,6 @@ class TextToEmbedding:
         mask = inputs["attention_mask"]
         return (mean_pooling(out.last_hidden_state.detach(),
                              mask).squeeze(1).cpu())
-
-
-class TextToEmbeddingFinetune(torch.nn.Module):
-    r"""Include :obj:`tokenize` that converts text data to tokens, and
-    :obj:`forward` function that converts tokens to embeddings with a
-    text model, whose parameters will also be finetuned along with the
-    tabular learning. The pooling strategy used here to derive sentence
-    embedding is the mean pooling which takes mean value of all tokens'
-    embeddings.
-
-    Args:
-        model (str): Model name to load by using :obj:`transformers`,
-            such as :obj:`distilbert-base-uncased` and
-            :obj:`sentence-transformers/all-distilroberta-v1`.
-    """
-    def __init__(self, model: str):
-        super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = AutoModel.from_pretrained(model)
-
-        if model == "distilbert-base-uncased":
-            target_modules = ["ffn.lin1"]
-        elif model == "sentence-transformers/all-distilroberta-v1":
-            target_modules = ["intermediate.dense"]
-        else:
-            target_modules = "all-linear"
-
-        peft_config = LoraConfig(
-            task_type=peftTaskType.FEATURE_EXTRACTION,
-            r=32,
-            lora_alpha=32,
-            inference_mode=False,
-            lora_dropout=0.1,
-            bias="none",
-            target_modules=target_modules,
-        )
-        self.model = get_peft_model(self.model, peft_config)
-        self.model.print_trainable_parameters()
-        embedding_model_fineteune_params = sum( p.numel() for p in self.model.parameters() if p.requires_grad)
-        ic(embedding_model_fineteune_params)
-
-    def forward(self, feat: dict[str, MultiNestedTensor]) -> Tensor:
-        # Pad [batch_size, 1, *] into [batch_size, 1, batch_max_seq_len], then,
-        # squeeze to [batch_size, batch_max_seq_len].
-        input_ids = feat["input_ids"].to_dense(fill_value=0).squeeze(dim=1)
-        # Set attention_mask of padding idx to be False
-        mask = feat["attention_mask"].to_dense(fill_value=0).squeeze(dim=1)
-
-        # Get text embeddings for each text tokenized column
-        # `out.last_hidden_state` has the shape:
-        # [batch_size, batch_max_seq_len, text_model_out_channels]
-        out = self.model(input_ids=input_ids, attention_mask=mask)
-
-        # Return value has the shape [batch_size, 1, text_model_out_channels]
-        return mean_pooling(out.last_hidden_state, mask)
-
-    def tokenize(self, sentences: list[str]) -> TextTokenizationOutputs:
-        # Tokenize batches of sentences
-        return self.tokenizer(sentences, truncation=True, padding=True,
-                              return_tensors="pt")
     
 def mean_pooling(last_hidden_state: Tensor, attention_mask: Tensor) -> Tensor:
     input_mask_expanded = (attention_mask.unsqueeze(-1).expand(
@@ -267,13 +202,14 @@ def parse_args():
     parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
     parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
     parser.add_argument("--st1_epochs", type=int, default=10)
-    parser.add_argument("--st1_lora_alpha", type=int, default=1)
-    parser.add_argument("--st1_lora_dropout", type=float, default=0.1)
-    parser.add_argument("--st1_r", type=int, default=8)
+    parser.add_argument("--lora_alpha", type=int, default=1)
+    parser.add_argument("--lora_dropout", type=float, default=0.1)
+    parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--st1_per_device_train_batch_size", type=int, default=8)
     parser.add_argument("--st1_per_device_eval_batch_size", type=int, default=8)
     parser.add_argument("--st1_learning_rate", type=float, default=2e-5)
     parser.add_argument("--st1_weight_decay", type=float, default=0.01)
+    parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints_")
 
     return parser.parse_args()
 
