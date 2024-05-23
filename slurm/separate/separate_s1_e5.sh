@@ -3,24 +3,22 @@
 # Parameters
 name="st1_e5"
 nrows=100000
-batch_size=300
-batch_size_embedder=5
+batch_size_embedder=1
 epochs=20
 cpus_per_task=1
 mem_per_cpu=80GB
 st1_epochs=10
 st1_lora_alpha=1
 st1_lora_dropout=0.1
-st1_r=16
-st1_per_device_train_batch_size=64
-st1_per_device_eval_batch_size=64
+st1_r=8
+st1_per_device_train_batch_size=1
+st1_per_device_eval_batch_size=1
 st1_learning_rate=2e-5
 st1_weight_decay=0.01
 gpu=true
 partition="gpu-a100"
 time="04:00:00"
 text_model="intfloat/e5-mistral-7b-instruct"
-checkpoint_dir="./e5_checkpoins"
 
 
 # Construct the job name dynamically, append gpu to the job name if GPU is used
@@ -28,6 +26,9 @@ job_name="${name}_rows${nrows}_bs-emb${st1_per_device_train_batch_size}_ep${st1_
 if [ $gpu == true ]; then
     job_name="${job_name}_gpu"
 fi
+
+# concatenated ./checkpoin_dit/ with the name of the model
+checkpoint_dir="./checkpoint_dir/${job_name}"
 
 # Path for the generated SLURM script
 generated_script_path="/home/$USER/cse3000/slurm/separate/scripts/${job_name}.sh"
@@ -55,7 +56,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 conda activate rel-mm
 
 # Run the Python script with the specified parameters
-srun python /home/$USER/cse3000/s1.py --name=$job_name --nrows=$nrows --batch_size=$batch_size --batch_size_embedder=$batch_size_embedder --epochs=$epochs --text_model=$text_model --task_type="regression" --st1_per_device_train_batch_size=$st1_per_device_train_batch_size --st1_per_device_eval_batch_size=$st1_per_device_eval_batch_size --st1_epochs=$st1_epochs --lora_alpha=$st1_lora_alpha --lora_dropout=$st1_lora_dropout --lora_r=$st1_r --st1_learning_rate=$st1_learning_rate --st1_weight_decay=$st1_weight_decay --checkpoint_dir=$checkpoint_dir
+srun python /home/$USER/cse3000/s1.py --name=$job_name --nrows=$nrows --batch_size_embedder=$batch_size_embedder --epochs=$epochs --text_model=$text_model --task_type="regression" --st1_per_device_train_batch_size=$st1_per_device_train_batch_size --st1_per_device_eval_batch_size=$st1_per_device_eval_batch_size --st1_epochs=$st1_epochs --lora_alpha=$st1_lora_alpha --lora_dropout=$st1_lora_dropout --lora_r=$st1_r --st1_learning_rate=$st1_learning_rate --st1_weight_decay=$st1_weight_decay --checkpoint_dir=$checkpoint_dir
 
 conda deactivate
 EOT

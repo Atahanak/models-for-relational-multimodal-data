@@ -165,6 +165,7 @@ wandb/
 *.err
 
 checkpoints/
+checkpoint_dir/
 results/
 scripts/
 fa_st1/

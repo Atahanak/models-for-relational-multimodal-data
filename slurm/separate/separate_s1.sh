@@ -2,12 +2,12 @@
 
 # Parameters
 name="st1"
-nrows=100000
-batch_size_embedder=5
+nrows=2000000
+batch_size_embedder=50000
 epochs=20
 cpus_per_task=1
-mem_per_cpu=15GB
-st1_epochs=10
+mem_per_cpu=30GB
+st1_epochs=20
 st1_lora_alpha=1
 st1_lora_dropout=0.1
 st1_r=16
@@ -17,9 +17,8 @@ st1_learning_rate=2e-5
 st1_weight_decay=0.01
 gpu=true
 partition="gpu-a100"
-time="04:00:00"
+time="16:00:00"
 text_model="sentence-transformers/all-distilroberta-v1"
-checkpoint_dir="./roberta_checkpoins"
 
 
 # Construct the job name dynamically, append gpu to the job name if GPU is used
@@ -27,6 +26,8 @@ job_name="${name}_rows${nrows}_bs-emb${st1_per_device_train_batch_size}_ep${st1_
 if [ $gpu == true ]; then
     job_name="${job_name}_gpu"
 fi
+
+checkpoint_dir="./checkpoint_dir/${job_name}"
 
 # Path for the generated SLURM script
 generated_script_path="/home/$USER/cse3000/slurm/separate/scripts/${job_name}.sh"

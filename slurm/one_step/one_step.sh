@@ -11,10 +11,10 @@ cpus_per_task=15
 mem_per_cpu=8GB
 one_step_lora_alpha=1
 one_step_lora_dropout=0.1
-one_step_r=8
+one_step_r=16
 gpu=true
 partition="gpu-a100"
-time="04:00:00"
+time="08:00:00"
 text_model="sentence-transformers/all-distilroberta-v1"
 
 # Construct the job name dynamically

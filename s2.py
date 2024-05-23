@@ -340,6 +340,9 @@ def mean_pooling(last_hidden_state: Tensor, attention_mask: Tensor) -> Tensor:
 def last_pooling(last_hidden_state: Tensor, attention_mask: Tensor) -> Tensor:
     # Find the last token that attends to previous tokens.
     sequence_lengths = attention_mask.sum(dim=1) - 1
+    # ic(last_hidden_state.shape)
+    # ic(sequence_lengths.shape)
+    # ic(sequence_lengths)
     batch_size = last_hidden_state.shape[0]
     return last_hidden_state[
         torch.arange(batch_size, device=last_hidden_state.device),
@@ -356,7 +359,8 @@ def get_stype_encoder_dict(
     else:
         model_cfg = ModelConfig(
             model=text_encoder,
-            out_channels=model_out_channels[args.text_model])
+            out_channels=768)#model_out_channels[args.text_model])
+        ic(model_out_channels[args.text_model])
         col_to_model_cfg = {
             col_name: model_cfg
             for col_name in train_tensor_frame.col_names_dict[
