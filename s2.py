@@ -6,8 +6,6 @@ from typing import Any
 
 import torch
 from icecream import ic
-from peft import LoraConfig, get_peft_model
-from peft import TaskType as peftTaskType
 from torch import Tensor
 from torch.nn import Module, MSELoss
 from torch.optim.lr_scheduler import ExponentialLR
@@ -19,14 +17,14 @@ import evaluate
 import torch_frame
 from torch_frame.config import ModelConfig
 from torch_frame.config.text_embedder import TextEmbedderConfig
-from torch_frame.data import DataLoader, MultiNestedTensor
+from torch_frame.data import DataLoader
 from torch_frame.nn import (EmbeddingEncoder, FTTransformer,
                             LinearEmbeddingEncoder, LinearEncoder,
                             LinearModelEncoder,
                             MultiCategoricalEmbeddingEncoder, StypeEncoder)
 from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
-from torch_frame.typing import TextTokenizationOutputs, TaskType
-from src import Custom_Dataset
+from torch_frame.typing import TaskType
+from src import AmazonFashionDataset
 import wandb
 from icecream import ic
 
@@ -48,15 +46,13 @@ def use_llm(args):
 
     text_encoder = TextToEmbedding(model=args.text_model, device=device)
     text_stype = torch_frame.text_embedded
-    kwargs = {
-        "text_stype": text_stype,
-        "col_to_text_embedder_cfg": TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.st2_batch_size_embedder),
-    }
-    dataset = Custom_Dataset(
+    col_to_text_embedder_cfg = TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.st2_batch_size_embedder)
+
+    dataset = AmazonFashionDataset(
         root=args.root, 
-        task_type=TaskType(args.task_type),
         nrows=args.nrows,
-        **kwargs)
+        text_stype=text_stype,
+        col_to_text_embedder_cfg=col_to_text_embedder_cfg)
     
     dataset.materialize()
     train_dataset, val_dataset, test_dataset = dataset.split()

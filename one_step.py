@@ -31,7 +31,7 @@ from torch_frame.nn import (
 )
 from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
 from torch_frame.typing import TaskType, TextTokenizationOutputs
-from src import Custom_Dataset
+from src import AmazonFashionDataset
 from icecream import ic
 
 
@@ -53,17 +53,14 @@ def main():
 
     text_encoder = TextToEmbeddingFinetune(model=args.text_model, args=args)
     text_stype = torch_frame.text_tokenized
-    kwargs = {
-        "text_stype": text_stype,
-        "col_to_text_tokenizer_cfg": TextTokenizerConfig(text_tokenizer=text_encoder.tokenize,
-                            batch_size=args.batch_size_tokenizer),
-    }
+    col_to_text_tokenizer_cfg = TextTokenizerConfig(text_tokenizer=text_encoder.tokenize,
+                            batch_size=args.batch_size_tokenizer)
 
-    dataset = Custom_Dataset(
+    dataset = AmazonFashionDataset(
         root=args.root, 
-        task_type=TaskType(args.task_type),
         nrows=args.nrows,
-        **kwargs)
+        text_stype=text_stype,
+        col_to_text_tokenizer_cfg=col_to_text_tokenizer_cfg)
     
     # batch_size = 512
     # if args.finetune:

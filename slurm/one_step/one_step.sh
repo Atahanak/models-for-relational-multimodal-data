@@ -2,19 +2,18 @@
 
 # Parameters
 name="1step"
-nrows=100000
-batch_size=256
-batch_size_tokenizer=50000
+nrows=10000
+batch_size=5
+batch_size_tokenizer=5
 epochs=50
-finetune=true
 cpus_per_task=15
 mem_per_cpu=8GB
 one_step_lora_alpha=1
 one_step_lora_dropout=0.1
-one_step_r=16
-gpu=true
+one_step_r=8
+gpu=false
 partition="gpu-a100"
-time="08:00:00"
+time="00:30:00"
 text_model="sentence-transformers/all-distilroberta-v1"
 
 # Construct the job name dynamically

@@ -1,7 +1,7 @@
 from .ibm_transactions_for_aml import IBMTransactionsAML
-from .custom_dataset import Custom_Dataset
+from .amazon_fashion import AmazonFashionDataset
 
 __all__ = [
     'IBMTransactionsAML',
-    'Custom_Dataset',
+    'AmazonFashionDataset',
 ]
