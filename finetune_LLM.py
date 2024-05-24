@@ -1,27 +1,16 @@
 import argparse
-from typing import Any
 
 import pandas as pd
-import torch
-import torch.nn.functional as F
 from datasets import Dataset
 from icecream import ic
 from peft import LoraConfig, get_peft_model
 from peft import TaskType as peftTaskType
-from torch import Tensor
 from tqdm import tqdm
 from transformers import (AutoModel, AutoModelForSequenceClassification,
                           AutoTokenizer, DataCollatorWithPadding, Trainer,
                           TrainingArguments)
 
 import evaluate
-import torch_frame
-from torch_frame.config import ModelConfig
-from torch_frame.nn import (EmbeddingEncoder,
-                            LinearEmbeddingEncoder, LinearEncoder,
-                            LinearModelEncoder,
-                            MultiCategoricalEmbeddingEncoder, StypeEncoder)
-from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
 
 
 def read_dataset(args):
@@ -83,7 +72,6 @@ def finetune_llm(args):
         mse = mse_metric.compute(predictions=predictions, references=labels)
         return {"mse": mse}
 
-
     # Trainer
     trainer = Trainer(
         model=model,
@@ -102,79 +90,9 @@ def finetune_llm(args):
     results = trainer.evaluate()
     print(results)
 
-
-
 def main():
     args = parse_args()
     finetune_llm(args)
-
-
-class TextToEmbedding:
-    def __init__(self, model: str, device: torch.device):
-        self.model_name = model
-        self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = AutoModel.from_pretrained(model).to(device)
-        embedding_model_learnable_params = sum( p.numel() for p in self.model.parameters() if p.requires_grad)
-        ic(embedding_model_learnable_params)
-    def __call__(self, sentences: list[str]) -> Tensor:
-        inputs = self.tokenizer(
-            sentences,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt",
-        )
-        for key in inputs:
-            if isinstance(inputs[key], Tensor):
-                inputs[key] = inputs[key].to(self.device)
-        with torch.no_grad():
-            out = self.model(**inputs)
-        # [batch_size, max_length or batch_max_length]
-        # Value is either one or zero, where zero means that
-        # the token is not attended to other tokens.
-        mask = inputs["attention_mask"]
-        return (mean_pooling(out.last_hidden_state.detach(),
-                             mask).squeeze(1).cpu())
-    
-def mean_pooling(last_hidden_state: Tensor, attention_mask: Tensor) -> Tensor:
-    input_mask_expanded = (attention_mask.unsqueeze(-1).expand(
-        last_hidden_state.size()).float())
-    embedding = torch.sum(
-        last_hidden_state * input_mask_expanded, dim=1) / torch.clamp(
-            input_mask_expanded.sum(1), min=1e-9)
-    return embedding.unsqueeze(1)
-
-def get_stype_encoder_dict(
-    text_stype: torch_frame.stype,
-    text_encoder: Any,
-    train_tensor_frame: torch_frame.TensorFrame,
-    args: argparse.Namespace,
-) -> dict[torch_frame.stype, StypeEncoder]:
-    if not args.finetune:
-        text_stype_encoder = LinearEmbeddingEncoder()
-    else:
-        model_cfg = ModelConfig(
-            model=text_encoder,
-            out_channels=768)#model_out_channels[args.text_model])
-        col_to_model_cfg = {
-            col_name: model_cfg
-            for col_name in train_tensor_frame.col_names_dict[
-                torch_frame.text_tokenized]
-        }
-        text_stype_encoder = LinearModelEncoder(
-            col_to_model_cfg=col_to_model_cfg)
-
-    stype_encoder_dict = {
-        torch_frame.categorical: EmbeddingEncoder(),
-        torch_frame.numerical: LinearEncoder(),
-        # If text_stype is text_embedded,
-        # it becomes embedding after materialization
-        text_stype.parent: text_stype_encoder,
-        torch_frame.multicategorical: MultiCategoricalEmbeddingEncoder(),
-        torch_frame.timestamp: TimestampEncoder()
-    }
-    return stype_encoder_dict
-
 
 def parse_args():
     parser = argparse.ArgumentParser()
