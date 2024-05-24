@@ -1,3 +1,5 @@
+import os.path
+
 import torch
 import torch_frame
 import torch_geometric
@@ -79,9 +81,12 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Generate which columns to mask and store in file for reproducibility across different runs
-            maskable_columns = num_columns + cat_columns
-            mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
-            np.save("../ibm_data/masked_columns", mask)
+            if os.path.exists("/scratch/imcauliffe/masked_columns.npy"):
+                mask = np.load("/scratch/imcauliffe/masked_columns.npy")
+            else:
+                maskable_columns = num_columns + cat_columns
+                mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
+                np.save("/scratch/imcauliffe/masked_columns.npy", mask)
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits)

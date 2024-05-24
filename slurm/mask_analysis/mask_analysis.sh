@@ -22,11 +22,13 @@ conda activate rel-mm
 
 for i in {1..4}
 do
-   srun python /home/$USER/cse3000/remove_mask.py
+   srun python /home/$USER/cse3000/mask_strategy_comparison.py --strategy="remove"
 
-   srun python /home/$USER/cse3000/bert_mask.py
+   srun python /home/$USER/cse3000/bert_mask.py --strategy="replace"
 
-   srun python /home/$USER/cse3000/replace_mask.py
+   srun python /home/$USER/cse3000/replace_mask.py --strategy="bert"
+
+   rm "/scratch/$USER/masked_columns.npy"
 done
 
 conda deactivate
