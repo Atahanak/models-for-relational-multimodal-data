@@ -1,6 +1,7 @@
-from torch.nn import Module, Sequential, LayerNorm, ReLU, Linear, ModuleList
+from torch.nn import Module, Sequential, LayerNorm, ReLU, Linear, ModuleList, Softmax
 from torch import Tensor
 from ..gnn.decoder import LinkPredHead
+
 
 class SelfSupervisedHead(Module):
     r"""Used for pretraining the FT-Transformer model."""
@@ -40,6 +41,41 @@ class SelfSupervisedHead(Module):
         num_out = self.num_decoder(x_cls)
         cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
         return num_out, cat_out
+
+
+class SelfSupervisedMVHead(Module):
+    r"""Used for pretraining the FT-Transformer model with mask vector prediction"""
+
+    def __init__(self, channels: int, num_numerical: int, num_categorical: list[int]) -> None:
+        super().__init__()
+        self.mcm_decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
+        self.mask_vector_decoder = Sequential(
+            LayerNorm(channels),
+            ReLU(),
+            Linear(channels, num_numerical + len(num_categorical))
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.mcm_decoder.reset_parameters()
+        for m in self.mask_vector_decoder:
+            if not isinstance(m, ReLU):
+                m.reset_parameters()
+
+    def forward(self, x_cls: Tensor) -> tuple[Tensor, list[Tensor], Tensor]:
+        r"""Forward pass.
+
+        Args:
+            x_cls (torch.Tensor): Output of the transformer.
+
+        Returns:
+            tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]: Numerical and categorical
+            outputs, and the prediction of the mask vector.
+        """
+        num_out, cat_out = self.mcm_decoder(x_cls)
+        mv_out = self.mask_vector_decoder(x_cls)
+        return num_out, cat_out, mv_out
+
 
 class SelfSupervisedLPHead(Module):
     r"""Used for pretraining the FT-Transformer model."""
