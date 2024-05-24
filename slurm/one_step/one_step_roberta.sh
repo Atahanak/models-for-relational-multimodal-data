@@ -1,7 +1,7 @@
 #!/bin/bash
 
 name="one_step"
-nrows=2000000
+nrows=2000
 batch_size=4
 batch_size_tokenizer=50000
 epochs=50
@@ -11,12 +11,13 @@ lora_r=16
 task_type="regression"
 model_name="roberta"
 text_model="sentence-transformers/all-distilroberta-v1"
+root="/scratch/$USER/AML_dataset/AMAZON_FASHION.csv"
 
 cpus_per_task=15
 mem_per_cpu=8GB
-gpu=true
+gpu=false
 partition="gpu-a100"
-time="16:00:00"
+time="00:10:00"
 
 # Construct the job name dynamically
 job_name="${name}_${model_name}_rows${nrows}_bs${batch_size}_bstok${batch_size_tokenizer}_ep${epochs}_cpus${cpus_per_task}_mem${mem_per_cpu}"
@@ -49,7 +50,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --batch_size=$batch_size --batch_size_tokenizer=$batch_size_tokenizer --epochs=$epochs --text_model=$text_model --task_type=$task_type --lora_alpha=$lora_alpha --lora_dropout=$lora_dropout --lora_r=$lora_r --script_path=$generated_script_path --finetune
+srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --batch_size=$batch_size --batch_size_tokenizer=$batch_size_tokenizer --epochs=$epochs --text_model=$text_model --task_type=$task_type --lora_alpha=$lora_alpha --lora_dropout=$lora_dropout --lora_r=$lora_r --script_path=$generated_script_path --finetune --root=$root
 
 conda deactivate
 EOT

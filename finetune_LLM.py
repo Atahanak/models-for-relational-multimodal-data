@@ -96,29 +96,11 @@ def main():
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--channels", type=int, default=256)
-    parser.add_argument("--num_layers", type=int, default=4)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--batch_size_tokenizer", type=int, default=10000)
-    parser.add_argument("--batch_size_embedder", type=int, default=1024)
-    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--compile", type=bool, default=False)
-    parser.add_argument("--testing", type=bool, default=False)
     parser.add_argument("--nrows", type=int, default=100)
-    parser.add_argument("--name", type=str, default="fashion")
-    parser.add_argument("--finetune", action="store_true")
-    parser.add_argument("--task_type", type=str,
-        choices=[
-            "binary_classification", "multiclass_classification", "regression"
-        ],
-        default="multiclass_classification",)    
-    parser.add_argument("--pos_weight", type=bool, default=False)
-    parser.add_argument("--gamma_rate", type=float, default=0.9)
+    parser.add_argument("--name", type=str, default="fashion")  
     parser.add_argument("--text_model", type=str, default="sentence-transformers/all-distilroberta-v1")
-    parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
-    parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
+    parser.add_argument("--root", type=str)
     parser.add_argument("--lora_alpha", type=int, default=1)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument("--lora_r", type=int, default=8)
@@ -129,24 +111,6 @@ def parse_args():
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints_")
 
     return parser.parse_args()
-
-model_out_channels = {
-    "distilbert-base-uncased": 768,
-    "roberta-large": 1024,
-    "microsoft/deberta-v3-large": 1024,
-    "google/electra-large-discriminator": 1024,
-    "sentence-transformers/all-distilroberta-v1": 768,
-}
-
-# Set for a 16 GB GPU
-model_batch_size = {
-    "distilbert-base-uncased": 128,
-    "roberta-large": 16,
-    "microsoft/deberta-v3-large": 8,
-    "google/electra-large-discriminator": 16,
-    "sentence-transformers/all-distilroberta-v1": 128*4,
-}
-    
 
 if __name__ == "__main__":
     main()

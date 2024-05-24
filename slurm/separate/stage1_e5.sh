@@ -4,16 +4,15 @@ name="st1_e5"
 nrows=2000000
 per_device_train_batch_size=128
 per_device_eval_batch_size=128
-batch_size_embedder=50000
 epochs=50
 lora_alpha=1
 lora_dropout=0.1
 lora_r=16
 learning_rate=2e-5
 weight_decay=0.01
-task_type="regression"
 model_name="e5"	
 text_model="intfloat/e5-mistral-7b-instruct"
+root="/scratch/$USER/AML_dataset/AMAZON_FASHION.csv"
 
 cpus_per_task=1
 mem_per_cpu=30GB
@@ -54,7 +53,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/finetune_LLM.py --name=$job_name --nrows=$nrows --batch_size_embedder=$batch_size_embedder --epochs=$epochs --text_model=$text_model --task_type=$task_type --per_device_train_batch_size=$per_device_train_batch_size --per_device_eval_batch_size=$per_device_eval_batch_size --epochs=$epochs --lora_alpha=$lora_alpha --lora_dropout=$lora_dropout --lora_r=$lora_r --learning_rate=$learning_rate --weight_decay=$weight_decay --checkpoint_dir=$checkpoint_dir
+srun python /home/$USER/cse3000/finetune_LLM.py --name=$job_name --nrows=$nrows --epochs=$epochs --text_model=$text_model --per_device_train_batch_size=$per_device_train_batch_size --per_device_eval_batch_size=$per_device_eval_batch_size --lora_alpha=$lora_alpha --lora_dropout=$lora_dropout --lora_r=$lora_r --learning_rate=$learning_rate --weight_decay=$weight_decay --checkpoint_dir=$checkpoint_dir --root=$root
 
 conda deactivate
 EOT

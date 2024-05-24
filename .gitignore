@@ -164,10 +164,6 @@ wandb/
 *.out
 *.err
 
-checkpoints/
 checkpoint_dir/
-results/
 scripts/
-fa_st1/
-fa_st2/
 environment_root.yml

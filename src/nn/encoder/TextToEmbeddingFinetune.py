@@ -3,10 +3,8 @@ from torch import Tensor
 from transformers import AutoModel, AutoTokenizer
 from icecream import ic
 from peft import LoraConfig, get_peft_model
-from peft import TaskType as peftTaskType
 from torch import Tensor
 from src.utils import mean_pooling
-import argparse
 from torch_frame.nn.encoder.stype_encoder import MultiNestedTensor
 from torch_frame.typing import TextTokenizationOutputs
 
@@ -24,28 +22,14 @@ class TextToEmbeddingFinetune(torch.nn.Module):
             such as :obj:`distilbert-base-uncased` and
             :obj:`sentence-transformers/all-distilroberta-v1`.
     """
-    def __init__(self, model: str, args: argparse.Namespace):
+    def __init__(self, model: str, peft_config: LoraConfig = None):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.model = AutoModel.from_pretrained(model)
 
-        if model == "distilbert-base-uncased":
-            target_modules = ["ffn.lin1"]
-        elif model == "sentence-transformers/all-distilroberta-v1":
-            target_modules = ["intermediate.dense"]
-        else:
-            target_modules = "all-linear"
-
-        peft_config = LoraConfig(
-            task_type=peftTaskType.FEATURE_EXTRACTION,
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            inference_mode=False,
-            lora_dropout=args.lora_dropout,
-            bias="none",
-            # target_modules=target_modules,
-        )
-        self.model = get_peft_model(self.model, peft_config)
+        if peft_config is not None:
+            self.model = get_peft_model(self.model, peft_config)
+        
         self.model.print_trainable_parameters()
         embedding_model_fineteune_params = sum( p.numel() for p in self.model.parameters() if p.requires_grad)
         ic(embedding_model_fineteune_params)

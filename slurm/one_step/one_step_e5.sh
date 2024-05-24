@@ -11,6 +11,7 @@ lora_r=16
 task_type="regression"
 model_name="e5"
 text_model="intfloat/e5-mistral-7b-instruct"
+root="/scratch/$USER/AML_dataset/AMAZON_FASHION.csv"
 
 cpus_per_task=15
 mem_per_cpu=8GB
@@ -49,7 +50,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --batch_size=$batch_size --batch_size_tokenizer=$batch_size_tokenizer --epochs=$epochs --text_model=$text_model --task_type=$task_type --lora_alpha=$lora_alpha --lora_dropout=$lora_dropout --lora_r=$lora_r --script_path=$generated_script_path --finetune
+srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --batch_size=$batch_size --batch_size_tokenizer=$batch_size_tokenizer --epochs=$epochs --text_model=$text_model --task_type=$task_type --lora_alpha=$lora_alpha --lora_dropout=$lora_dropout --lora_r=$lora_r --script_path=$generated_script_path --finetune --root=$root
 
 conda deactivate
 EOT

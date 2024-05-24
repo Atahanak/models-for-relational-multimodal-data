@@ -28,6 +28,8 @@ from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
 from torch_frame.typing import TaskType
 from src import AmazonFashionDataset, TextToEmbedding, TextToEmbeddingFinetune
 from icecream import ic
+from peft import LoraConfig, TaskType as peftTaskType
+
 
 
 def main():
@@ -47,8 +49,24 @@ def main():
     ####################################
 
     ########### Define Text Encoder ############
+    # if model == "distilbert-base-uncased":
+    #         target_modules = ["ffn.lin1"]
+    # elif model == "sentence-transformers/all-distilroberta-v1":
+    #     target_modules = ["intermediate.dense"]
+    # else:
+    #     target_modules = "all-linear"
+        
     if args.finetune:
-        text_encoder = TextToEmbeddingFinetune(model=args.text_model, args=args)
+        peft_config = LoraConfig(
+            task_type=peftTaskType.FEATURE_EXTRACTION,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            inference_mode=False,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            # target_modules=target_modules,
+        )
+        text_encoder = TextToEmbeddingFinetune(model=args.text_model, peft_config=peft_config)
         text_stype = torch_frame.text_tokenized
         col_to_text_tokenizer_cfg = TextTokenizerConfig(text_tokenizer=text_encoder.tokenize,
                                 batch_size=args.batch_size_tokenizer)
@@ -332,35 +350,15 @@ def parse_args():
             "binary_classification", "multiclass_classification", "regression"
         ],
         default="multiclass_classification",)    
-    parser.add_argument("--pos_weight", type=bool, default=False)
     parser.add_argument("--gamma_rate", type=float, default=0.9)
     parser.add_argument("--text_model", type=str, default="sentence-transformers/all-distilroberta-v1")
-    parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
-    parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
+    parser.add_argument("--root", type=str)
     parser.add_argument("--lora_alpha", type=int, default=1)
     parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument("--script_path", type=str, default="")
 
     return parser.parse_args()
-
-model_out_channels = {
-    "distilbert-base-uncased": 768,
-    "roberta-large": 1024,
-    "microsoft/deberta-v3-large": 1024,
-    "google/electra-large-discriminator": 1024,
-    "sentence-transformers/all-distilroberta-v1": 768,
-}
-
-# Set for a 16 GB GPU
-model_batch_size = {
-    "distilbert-base-uncased": 128,
-    "roberta-large": 16,
-    "microsoft/deberta-v3-large": 8,
-    "google/electra-large-discriminator": 16,
-    "sentence-transformers/all-distilroberta-v1": 128*4,
-}
-    
 
 if __name__ == "__main__":
     main()

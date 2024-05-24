@@ -8,6 +8,7 @@ epochs=50
 task_type="regression"
 model_name="roberta"
 text_model="/home/$USER/cse3000/checkpoints/checkpoint-22500"
+root="/scratch/$USER/AML_dataset/AMAZON_FASHION.csv"
 
 cpus_per_task=15
 mem_per_cpu=8GB
@@ -46,7 +47,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --text_model=$text_model --task_type=$task_type --epochs=$epochs --batch_size=$batch_size --batch_size_embedder=$batch_size_embedder --script_path=$generated_script_path
+srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --text_model=$text_model --task_type=$task_type --epochs=$epochs --batch_size=$batch_size --batch_size_embedder=$batch_size_embedder --script_path=$generated_script_path --root=$root
 
 conda deactivate
 EOT
