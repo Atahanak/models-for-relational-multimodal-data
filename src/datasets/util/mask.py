@@ -34,6 +34,13 @@ def apply_transformation(self: torch_frame.data.Dataset,
 
 def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
                    col_to_stype: dict[str, torch_frame.stype]) -> dict[str, torch_frame.stype]:
+    # Handle supervised column
+    if pretrain is None:
+        col_to_stype['Is Laundering'] = torch_frame.categorical
+        self.target_col = 'Is Laundering'
+        return col_to_stype
+
+    # Handle pretrain columns
     if {PretrainType.MASK, PretrainType.LINK_PRED}.issubset(pretrain):
         # merge link and mask columns into a column called target
         self.df['target'] = self.df['mask'] + self.df['link']
@@ -49,9 +56,6 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.target_col = 'mask'
     elif PretrainType.LINK_PRED in pretrain:
         self.target_col = 'link'
-    else:
-        col_to_stype['Is Laundering'] = torch_frame.categorical
-        self.target_col = 'Is Laundering'
     return col_to_stype
 
 

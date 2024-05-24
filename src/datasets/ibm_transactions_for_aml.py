@@ -88,8 +88,9 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             # Apply input corruption
             self.df["maskable_column"] = mask
-            for transformation in pretrain:
-                col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
+            if pretrain:
+                for transformation in pretrain:
+                    col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
 
             # Define target column to predict
             col_to_stype = set_target_col(self, pretrain, col_to_stype)
