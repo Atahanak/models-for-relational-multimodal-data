@@ -20,18 +20,19 @@ torch.set_float32_matmul_precision('high')
 
 # %%
 seed = 42
-batch_size = 1024
-channels = 32
-num_layers = 4
+batch_size = 200
+channels = 128
+num_layers = 3
 
 data_split = [0.6, 0.2, 0.2]
 split_type = "temporal"
 
 pretrain = 'mask'
 compile = False
-lr = 5e-4
+lr = 2e-4
 eps = 1e-8
-epochs = 10
+weight_decay = 1e-3
+epochs = 3
 args = {
     "testing": False,
     "seed": seed,
@@ -45,22 +46,24 @@ args = {
     "epochs": epochs,
     "data_split": data_split,
     "split_type": split_type,
+    'weight_decay': weight_decay
 }
 
 
 # %%
 wandb.login()
 run = wandb.init(
+    dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm", 
-    name="model=fttransformer,dataset=IBM-AML_Hi_Sm,objective=MCM-nonan,loss=weighted_loss", 
+    project=f"rel-mm-2", 
+    name=f"model=fttransformer,dataset=IBM-AML_Hi_Sm,objective=MCM,channels={channels},weight_decay={weight_decay}", 
     config=args
 )
 
 # %%
 from src.datasets import IBMTransactionsAML
-#dataset = IBMTransactionsAML(root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy.csv', pretrain=pretrain)
-dataset = IBMTransactionsAML(root='/scratch/cgriu/AML_dataset_processed/HI-Small_Trans-c.csv', pretrain=pretrain, split_type='temporal', splits=data_split)
+dataset = IBMTransactionsAML(root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', pretrain=pretrain)
+#dataset = IBMTransactionsAML(root='/scratch/cgriu/AML_dataset_processed/HI-Small_Trans-c.csv', pretrain=pretrain, split_type='temporal', splits=data_split)
 ic(dataset)
 dataset.materialize()
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
@@ -124,12 +127,12 @@ wandb.log({"learnable_params": learnable_params})
 # Prepare optimizer and lr scheduler
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
-    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
+]
+#optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
 def calc_loss(pred, y):
     accum_n = accum_c = t_n = t_c = 0
@@ -159,9 +162,9 @@ def train(epoc: int) -> float:
             loss.backward()
             optimizer.step()
 
-            loss_accum += float(loss) * len(tf.y)
-            loss_c_accum += loss_c[0]
-            loss_n_accum += loss_n[0]
+            loss_accum += loss.item() * len(tf.y)
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
             total_count += len(tf.y)
             t_c += loss_c[1]
             t_n += loss_n[1]
@@ -171,7 +174,7 @@ def train(epoc: int) -> float:
             del loss_n
             del pred
             del tf
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            wandb.log({"train_loss_mcm": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
     return ((loss_c_accum/t_c) * (num_categorical/num_columns)) + ((loss_n_accum/t_n) * (num_numerical/num_columns))
 
 @torch.no_grad()
@@ -185,8 +188,8 @@ def test(loader: DataLoader, dataset_name) -> float:
             tf = tf.to(device)
             pred = model(tf)
             _, loss_c, loss_n = calc_loss(pred, tf.y)
-            loss_c_accum += loss_c[0]
-            loss_n_accum += loss_n[0]
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
             t_c += loss_c[1]
             t_n += loss_n[1]
             for i, ans in enumerate(tf.y):
@@ -197,6 +200,7 @@ def test(loader: DataLoader, dataset_name) -> float:
                 else:
                     accum_l2 += torch.square(ans[0] - pred[0][i][int(ans[1])]) #rmse
             
+            wandb.log({f"{dataset_name}_loss_mcm": ((loss_c_accum/t_c) * (num_categorical/num_columns)) + ((loss_n_accum/t_n) * (num_numerical/num_columns)), f"{dataset_name}_loss_c": loss_c_accum/t_c, f"{dataset_name}_loss_n": loss_n_accum/t_n})
             t.set_postfix(accuracy=f'{accum_acc/t_c:.4f}', rmse=f'{torch.sqrt(accum_l2/t_n):.4f}', loss=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}', loss_c = f'{loss_c_accum/t_c:.4f}', loss_n = f'{loss_n_accum/t_n:.4f}')
         wandb.log({f"{dataset_name}_accuracy": accum_acc/t_c, f"{dataset_name}_rmse": torch.sqrt(accum_l2/t_n), f"{dataset_name}_loss": ((loss_c_accum/t_c) * (num_categorical/num_columns)) + ((loss_n_accum/t_n) * (num_numerical/num_columns)), f"{dataset_name}_loss_c": loss_c_accum/t_c, f"{dataset_name}_loss_n": loss_n_accum/t_n})
         del tf
@@ -206,7 +210,7 @@ def test(loader: DataLoader, dataset_name) -> float:
         return [rmse, accuracy]
 
 # %%
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 # train_metric = test(train_loader, "train")
 # val_metric = test(val_loader, "val")
 # test_metric = test(test_loader, "test")

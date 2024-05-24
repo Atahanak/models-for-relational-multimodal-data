@@ -75,7 +75,7 @@ parameters_dict = {
     #    'max': 3e-4
     #},
     'dropout': {
-        'values': [0.3, 0.5, 0.7]
+        'values': [0.3, 0.5]
     },
     'batch_size': {
         'values': [100, 200, 300]
@@ -91,9 +91,9 @@ parameters_dict.update({
     'lr': {
         'value': 2e-4,
     },
-    'batch_size': {
-        'value': 200
-    },
+    #'batch_size': {
+    #    'value': 200
+    #},
     'epochs': {
         'value': 1
     },
