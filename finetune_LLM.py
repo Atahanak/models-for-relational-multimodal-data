@@ -68,11 +68,11 @@ def finetune_llm(args):
     training_args = TrainingArguments(
         output_dir=args.checkpoint_dir,
         evaluation_strategy="epoch",
-        learning_rate=args.st1_learning_rate,
-        per_device_train_batch_size=args.st1_per_device_train_batch_size,
-        per_device_eval_batch_size=args.st1_per_device_eval_batch_size,
-        num_train_epochs=args.st1_epochs,
-        weight_decay=args.st1_weight_decay,
+        learning_rate=args.learning_rate,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_eval_batch_size=args.per_device_eval_batch_size,
+        num_train_epochs=args.epochs,
+        weight_decay=args.weight_decay,
         run_name=args.name
     )
     mse_metric = evaluate.load("mse")
@@ -155,7 +155,7 @@ def get_stype_encoder_dict(
     else:
         model_cfg = ModelConfig(
             model=text_encoder,
-            out_channels=model_out_channels[args.text_model])
+            out_channels=768)#model_out_channels[args.text_model])
         col_to_model_cfg = {
             col_name: model_cfg
             for col_name in train_tensor_frame.col_names_dict[
@@ -201,14 +201,13 @@ def parse_args():
     parser.add_argument("--text_model", type=str, default="sentence-transformers/all-distilroberta-v1")
     parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
     parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
-    parser.add_argument("--st1_epochs", type=int, default=10)
     parser.add_argument("--lora_alpha", type=int, default=1)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument("--lora_r", type=int, default=8)
-    parser.add_argument("--st1_per_device_train_batch_size", type=int, default=8)
-    parser.add_argument("--st1_per_device_eval_batch_size", type=int, default=8)
-    parser.add_argument("--st1_learning_rate", type=float, default=2e-5)
-    parser.add_argument("--st1_weight_decay", type=float, default=0.01)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=8)
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=8)
+    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints_")
 
     return parser.parse_args()

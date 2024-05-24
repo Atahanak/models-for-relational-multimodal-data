@@ -1,37 +1,44 @@
-import argparse
-import math
+import torch
+import torch.nn.functional as F
 import os
+import argparse
+import wandb
+import math
 import time
 from typing import Any
-
-import torch
-from icecream import ic
+from peft import LoraConfig
+from peft import TaskType as peftTaskType
+from peft import get_peft_model
 from torch import Tensor
-from torch.nn import Module, MSELoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 from torch.optim.lr_scheduler import ExponentialLR
-from torch.utils.data import DataLoader
-from torchmetrics import MeanSquaredError
+from torchmetrics import AUROC, Accuracy, MeanSquaredError
 from tqdm import tqdm
-from transformers import (AutoModel, AutoTokenizer)
-import evaluate
+from transformers import AutoModel, AutoTokenizer
 import torch_frame
 from torch_frame.config import ModelConfig
 from torch_frame.config.text_embedder import TextEmbedderConfig
-from torch_frame.data import DataLoader
-from torch_frame.nn import (EmbeddingEncoder, FTTransformer,
-                            LinearEmbeddingEncoder, LinearEncoder,
-                            LinearModelEncoder,
-                            MultiCategoricalEmbeddingEncoder, StypeEncoder)
+from torch_frame.config.text_tokenizer import TextTokenizerConfig
+from torch_frame.data import DataLoader, MultiNestedTensor
+from torch_frame.nn import (
+    EmbeddingEncoder,
+    FTTransformer,
+    LinearEmbeddingEncoder,
+    LinearEncoder,
+    LinearModelEncoder,
+    MultiCategoricalEmbeddingEncoder,
+    StypeEncoder,
+)
 from torch_frame.nn.encoder.stype_encoder import TimestampEncoder
-from torch_frame.typing import TaskType
+from torch_frame.typing import TaskType, TextTokenizationOutputs
 from src import AmazonFashionDataset
-import wandb
 from icecream import ic
 
 
-
-def use_llm(args):
+def main():
+    args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    args.device = device
 
     ########### Wandb Setup ############
     wandb.login()
@@ -41,29 +48,63 @@ def use_llm(args):
         name=args.name,
         config=args
     )
-    script_path = "/home/cgriu/cse3000/slurm/separate/scripts/"+args.name+".sh"
-    wandb.save(script_path)
+    wandb.save(args.script_path)
+    ####################################
 
-    text_encoder = TextToEmbedding(model=args.text_model, device=device)
-    text_stype = torch_frame.text_embedded
-    col_to_text_embedder_cfg = TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.st2_batch_size_embedder)
+    ########### Define Text Encoder ############
+    if args.finetune:
+        text_encoder = TextToEmbeddingFinetune(model=args.text_model, args=args)
+        text_stype = torch_frame.text_tokenized
+        col_to_text_tokenizer_cfg = TextTokenizerConfig(text_tokenizer=text_encoder.tokenize,
+                                batch_size=args.batch_size_tokenizer)
+        kwargs = {
+            "col_to_text_tokenizer_cfg": col_to_text_tokenizer_cfg
+        }
+    else:
+        text_encoder = TextToEmbedding(model=args.text_model, device=device)
+        text_stype = torch_frame.text_embedded
+        col_to_text_embedder_cfg = TextEmbedderConfig(text_embedder=text_encoder, batch_size=args.batch_size_embedder)
+        kwargs = {
+            "col_to_text_embedder_cfg": col_to_text_embedder_cfg
+        }
+    ############################################
 
+    ########### Load Dataset ############
     dataset = AmazonFashionDataset(
         root=args.root, 
         nrows=args.nrows,
         text_stype=text_stype,
-        col_to_text_embedder_cfg=col_to_text_embedder_cfg)
+        **kwargs)
+    
+    # batch_size = 512
+    # if args.finetune:
+    #     batch_size = model_batch_size[args.text_model]
+    #     col_stypes = list(dataset.col_to_stype.values())
+    #     n_tokenized = len([
+    #         col_stype for col_stype in col_stypes
+    #         if col_stype == torch_frame.stype.text_tokenized
+    #     ])
+    #     batch_size //= n_tokenized
     
     dataset.materialize()
     train_dataset, val_dataset, test_dataset = dataset.split()
 
-    train_dataset_tensor = train_dataset.tensor_frame
-    val_dataset_tensor = val_dataset.tensor_frame
-    test_dataset_tensor = test_dataset.tensor_frame
-    train_loader = DataLoader(train_dataset_tensor, batch_size=args.st2_batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset_tensor, batch_size=args.st2_batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset_tensor, batch_size=args.st2_batch_size, shuffle=False)
+    train_tensor_frame = train_dataset.tensor_frame
+    val_tensor_frame = val_dataset.tensor_frame
+    test_tensor_frame = test_dataset.tensor_frame
+    train_loader = DataLoader(train_tensor_frame, batch_size=args.batch_size,
+                            shuffle=True)
+    val_loader = DataLoader(val_tensor_frame, batch_size=args.batch_size)
+    test_loader = DataLoader(test_tensor_frame, batch_size=args.batch_size)
+    wandb.log({
+        "train_loader size": len(train_loader), 
+        "val_loader size": len(val_loader), 
+        "test_loader size": len(test_loader)
+    })
+    ####################################
 
+    ########### Define Model, Loss, Metric, Optimizer ############
+    # dataset.task_type == TaskType.REGRESSION:
     out_channels = 1
     loss_fun = MSELoss()
     metric_computer = MeanSquaredError(squared=False).to(device)
@@ -74,21 +115,19 @@ def use_llm(args):
         out_channels=out_channels,
         num_layers=args.num_layers,
         col_stats=dataset.col_stats,
-        col_names_dict=train_dataset.tensor_frame.col_names_dict,
+        col_names_dict=train_tensor_frame.col_names_dict,
         stype_encoder_dict=get_stype_encoder_dict(
-                    text_stype, text_encoder, train_dataset.tensor_frame, args),
+                    text_stype, text_encoder, train_tensor_frame, args),
     ).to(device)
-
-    model.reset_parameters()
+    
+    model.reset_parameters()  
     model = torch.compile(model, dynamic=True) if args.compile else model
     learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    ic(learnable_params)
     model_size = sum(p.numel() for p in model.parameters())
-    ic(model_size)
-
-    # Define optimizer and scheduler
+    ic(learnable_params, model_size)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = ExponentialLR(optimizer, gamma=args.gamma_rate)
+    ##############################################################
 
     main_torch(higher_is_better, args, model, train_loader,
                    val_loader, test_loader, lr_scheduler, optimizer, dataset.task_type, loss_fun, metric_computer, device)
@@ -115,10 +154,13 @@ def main_torch(
     else:
         best_val_metric = math.inf
 
-    for epoch in range(1, args.st2_epochs + 1):
-        train_loss = train(model, train_loader, optimizer, epoch, loss_fun, device, task_type)
+    for epoch in range(1, args.epochs + 1):
+        metrics = train(model, train_loader, optimizer, epoch, loss_fun, device, task_type)
         val_metric = test(model, val_loader, metric_computer, device, task_type)
-        wandb.log({f"train_loss": train_loss, f"val_metric": val_metric})
+        metrics.update({"val_metric": val_metric})
+        metrics.update({"epoch": epoch})
+        wandb.log(metrics)
+       
         if higher_is_better:
             if val_metric > best_val_metric:
                 best_val_metric = val_metric
@@ -128,7 +170,7 @@ def main_torch(
                 best_val_metric = val_metric
                 best_test_metric = test(model, test_loader, metric_computer, device, task_type)
         lr_scheduler.step()
-        print(f'Train Loss: {train_loss:.4f}, Val: {val_metric:.4f}')
+        print(f'Train Loss: {metrics["train_loss"]:.4f}, Val Metric: {val_metric:.4f}')
 
     end_time = time.time()
     result_dict = {
@@ -138,10 +180,6 @@ def main_torch(
         'total_time': end_time - start_time,
     }
     print(result_dict)
-    # Save results
-    if args.result_path != '':
-        os.makedirs(os.path.dirname(args.result_path), exist_ok=True)
-        torch.save(result_dict, args.result_path)
 
 
 def train(
@@ -217,18 +255,16 @@ def train(
         end_time = time.time()
         batch_times.append(end_time - start_time)
 
-    # Log average of times
-    wandb.log({
-        "epoch": epoch,
-        "data_load_time": sum(data_load_times) / len(data_load_times),
-        "device_transfer_time": sum(device_transfer_times) / len(device_transfer_times),
-        "loss_computation_time": sum(loss_computation_times) / len(loss_computation_times),
-        "backward_time": sum(backward_times) / len(backward_times),
-        "forward_time": sum(forward_times) / len(forward_times),
-        "batch_time": sum(batch_times) / len(batch_times),
-    })
-
-    return loss_accum / total_count
+    metrics = {
+        "data_load_time": sum(data_load_times),
+        "device_transfer_time": sum(device_transfer_times),
+        "loss_computation_time": sum(loss_computation_times),
+        "backward_time": sum(backward_times),
+        "forward_time": sum(forward_times),
+        "batch_time": sum(batch_times),
+        "train_loss": loss_accum / total_count
+    }
+    return metrics
 
 @torch.no_grad()
 def test(
@@ -316,14 +352,65 @@ class TextToEmbedding:
                                 mask).detach().cpu().to(torch.float32)
         else:
             raise ValueError(f"{self.pooling} is not supported.")
-
-
-def main():
-    args = parse_args()
-    use_llm(args)
-    return
-
         
+class TextToEmbeddingFinetune(torch.nn.Module):
+    r"""Include :obj:`tokenize` that converts text data to tokens, and
+    :obj:`forward` function that converts tokens to embeddings with a
+    text model, whose parameters will also be finetuned along with the
+    tabular learning. The pooling strategy used here to derive sentence
+    embedding is the mean pooling which takes mean value of all tokens'
+    embeddings.
+
+    Args:
+        model (str): Model name to load by using :obj:`transformers`,
+            such as :obj:`distilbert-base-uncased` and
+            :obj:`sentence-transformers/all-distilroberta-v1`.
+    """
+    def __init__(self, model: str, args: argparse.Namespace):
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        self.model = AutoModel.from_pretrained(model)
+
+        if model == "distilbert-base-uncased":
+            target_modules = ["ffn.lin1"]
+        elif model == "sentence-transformers/all-distilroberta-v1":
+            target_modules = ["intermediate.dense"]
+        else:
+            target_modules = "all-linear"
+
+        peft_config = LoraConfig(
+            task_type=peftTaskType.FEATURE_EXTRACTION,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            inference_mode=False,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            # target_modules=target_modules,
+        )
+        self.model = get_peft_model(self.model, peft_config)
+        self.model.print_trainable_parameters()
+        embedding_model_fineteune_params = sum( p.numel() for p in self.model.parameters() if p.requires_grad)
+        ic(embedding_model_fineteune_params)
+
+    def forward(self, feat: dict[str, MultiNestedTensor]) -> Tensor:
+        # Pad [batch_size, 1, *] into [batch_size, 1, batch_max_seq_len], then,
+        # squeeze to [batch_size, batch_max_seq_len].
+        input_ids = feat["input_ids"].to_dense(fill_value=0).squeeze(dim=1)
+        # Set attention_mask of padding idx to be False
+        mask = feat["attention_mask"].to_dense(fill_value=0).squeeze(dim=1)
+
+        # Get text embeddings for each text tokenized column
+        # `out.last_hidden_state` has the shape:
+        # [batch_size, batch_max_seq_len, text_model_out_channels]
+        out = self.model(input_ids=input_ids, attention_mask=mask)
+
+        # Return value has the shape [batch_size, 1, text_model_out_channels]
+        return mean_pooling(out.last_hidden_state, mask)
+
+    def tokenize(self, sentences: list[str]) -> TextTokenizationOutputs:
+        # Tokenize batches of sentences
+        return self.tokenizer(sentences, truncation=True, padding=True,
+                              return_tensors="pt")
     
 def mean_pooling(last_hidden_state: Tensor, attention_mask: Tensor) -> Tensor:
     input_mask_expanded = (attention_mask.unsqueeze(-1).expand(
@@ -356,7 +443,6 @@ def get_stype_encoder_dict(
         model_cfg = ModelConfig(
             model=text_encoder,
             out_channels=768)#model_out_channels[args.text_model])
-        ic(model_out_channels[args.text_model])
         col_to_model_cfg = {
             col_name: model_cfg
             for col_name in train_tensor_frame.col_names_dict[
@@ -376,12 +462,15 @@ def get_stype_encoder_dict(
     }
     return stype_encoder_dict
 
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--channels", type=int, default=256)
     parser.add_argument("--num_layers", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size_tokenizer", type=int, default=10000)
+    parser.add_argument("--batch_size_embedder", type=int, default=1024)
     parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--compile", type=bool, default=False)
     parser.add_argument("--testing", type=bool, default=False)
@@ -392,15 +481,16 @@ def parse_args():
         choices=[
             "binary_classification", "multiclass_classification", "regression"
         ],
-        default="regression",)    
+        default="multiclass_classification",)    
     parser.add_argument("--pos_weight", type=bool, default=False)
     parser.add_argument("--gamma_rate", type=float, default=0.9)
     parser.add_argument("--text_model", type=str, default="sentence-transformers/all-distilroberta-v1")
     parser.add_argument("--result_path", type=str, default="/home/cgriu/cse3000/slurm/fashion/results/result.pth")
     parser.add_argument("--root", type=str, default="/scratch/cgriu/AML_dataset/AMAZON_FASHION.csv")
-    parser.add_argument("--st2_epochs", type=int, default=10)
-    parser.add_argument("--st2_batch_size_embedder", type=int, default=5)
-    parser.add_argument("--st2_batch_size", type=int, default=256)
+    parser.add_argument("--lora_alpha", type=int, default=1)
+    parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_dropout", type=float, default=0.1)
+    parser.add_argument("--script_path", type=str, default="")
 
     return parser.parse_args()
 

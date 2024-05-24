@@ -1,13 +1,13 @@
 #!/bin/bash
 
-name="no_finetune"
+name="separate_st2"
 nrows=2000000
 batch_size=256
-batch_size_embedder=8
+batch_size_embedder=1024
 epochs=50
 task_type="regression"
-model_name="e5"
-text_model="intfloat/e5-mistral-7b-instruct"
+model_name="roberta"
+text_model="/home/$USER/cse3000/checkpoints/checkpoint-22500"
 
 cpus_per_task=15
 mem_per_cpu=8GB
@@ -22,7 +22,7 @@ if [ $gpu == true ]; then
 fi
 
 # Path for the generated SLURM script
-generated_script_path="/home/$USER/cse3000/slurm/$name/$model_name/scripts/${job_name}.sh"
+generated_script_path="/home/$USER/cse3000/slurm/separate/stage2/$model_name/scripts/${job_name}.sh"
 
 # Create the SLURM script
 cat <<EOT > $generated_script_path
@@ -36,8 +36,8 @@ cat <<EOT > $generated_script_path
 #SBATCH --cpus-per-task=$cpus_per_task
 $([ $gpu == true ] && echo "#SBATCH --gpus-per-task=1")
 #SBATCH --account=education-eemcs-courses-cse3000
-#SBATCH --output=/home/%u/cse3000/slurm/$name/$model_name/logs/%x_%j.out
-#SBATCH --error=/home/%u/cse3000/slurm/$name/$model_name/logs/%x_%j.err
+#SBATCH --output=/home/%u/cse3000/slurm/separate/stage2/$model_name/logs/%x_%j.out
+#SBATCH --error=/home/%u/cse3000/slurm/separate/stage2/$model_name/logs/%x_%j.err
 
 module load miniconda3
 

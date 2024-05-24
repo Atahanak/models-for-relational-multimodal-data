@@ -3,11 +3,11 @@
 name="no_finetune"
 nrows=2000000
 batch_size=256
-batch_size_embedder=8
+batch_size_embedder=1024
 epochs=50
 task_type="regression"
-model_name="e5"
-text_model="intfloat/e5-mistral-7b-instruct"
+model_name="roberta"
+text_model="sentence-transformers/all-distilroberta-v1"
 
 cpus_per_task=15
 mem_per_cpu=8GB

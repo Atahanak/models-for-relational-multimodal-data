@@ -90,8 +90,8 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
 
         # self.df = pd.read_csv(root, dtype=dtypes, names=names, header=0)
         self.df = pd.read_csv(root, header=0, nrows=nrows)
-        self.df = self.df.dropna()
-        self.df = self.df.reset_index(drop=True)
+        # self.df = self.df.dropna()
+        # self.df = self.df.reset_index(drop=True)
         # self.df['unixReviewTime'] = pd.to_datetime(self.df['unixReviewTime'], format='%m %d, %Y')
 
         col_to_stype = {
