@@ -4,5 +4,6 @@ from .supervised import *
 
 __all__ = classes = [
     'SelfSupervisedHead',
+    'SelfSupervisedMVHead',
     'SupervisedHead',
 ]
