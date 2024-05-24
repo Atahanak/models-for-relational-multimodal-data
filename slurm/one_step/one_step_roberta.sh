@@ -1,8 +1,8 @@
 #!/bin/bash
 
 name="one_step"
-nrows=100000
-batch_size=256
+nrows=2000000
+batch_size=4
 batch_size_tokenizer=50000
 epochs=50
 lora_alpha=1
@@ -14,9 +14,9 @@ text_model="sentence-transformers/all-distilroberta-v1"
 
 cpus_per_task=15
 mem_per_cpu=8GB
-gpu=false
+gpu=true
 partition="gpu-a100"
-time="00:30:00"
+time="16:00:00"
 
 # Construct the job name dynamically
 job_name="${name}_${model_name}_rows${nrows}_bs${batch_size}_bstok${batch_size_tokenizer}_ep${epochs}_cpus${cpus_per_task}_mem${mem_per_cpu}"

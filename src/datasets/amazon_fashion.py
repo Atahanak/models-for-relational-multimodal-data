@@ -95,7 +95,6 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
         # self.df['unixReviewTime'] = pd.to_datetime(self.df['unixReviewTime'], format='%m %d, %Y')
 
         col_to_stype = {
-            'overall': torch_frame.numerical,  # Numerical rating
             'verified': torch_frame.categorical,  # Binary data treated as categorical
             'reviewerID': torch_frame.categorical,  # Categorical, used for IDs
             'asin': torch_frame.categorical,  # Categorical unique identifiers for products
@@ -115,8 +114,7 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
             self.random_split()
 
         if 'mask' in pretrain:
-            maskable_columns = ['overall', 'verified', 'vote',
-                                'summary']
+            maskable_columns = ['verified', 'vote']
             self.df['mask'] = None
             self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
             col_to_stype['mask'] = torch_frame.mask
@@ -155,6 +153,11 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
             x = torch.arange(num_nodes)
             self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
             self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+
+            # remove reviewerID and asin columns from the dataframe and col_to_stype
+            self.df = self.df.drop(columns=['reviewerID', 'asin'])
+            del col_to_stype['reviewerID']
+            del col_to_stype['asin']
 
         if pretrain == 'lp':
             self.target_col = 'link'
