@@ -6,7 +6,7 @@ from torch import Tensor
 from torch.nn import Module
 
 import torch_frame
-from datasets.util.mask import PretrainType
+from src.datasets.util.mask import PretrainType
 from torch_frame import TensorFrame, stype
 from torch_frame.data.stats import StatType
 from torch_frame.nn.conv import FTTransformerConvs
@@ -61,7 +61,7 @@ class FTTransformer(Module):
         col_stats: dict[str, dict[StatType, Any]],
         col_names_dict: dict[torch_frame.stype, list[str]],
         stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
-        pretrain: bool = False,
+        pretrain = {},
     ) -> None:
         super().__init__()
         if num_layers <= 0:
