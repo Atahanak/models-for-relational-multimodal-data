@@ -6,7 +6,7 @@ from torch import Tensor
 from torch.nn import Module
 
 import torch_frame
-from datasets.util.mask import PretrainType
+from src.datasets.util.mask import PretrainType
 from torch_frame import TensorFrame, stype
 from torch_frame.data.stats import StatType
 from torch_frame.nn.conv import FTTransformerConvs

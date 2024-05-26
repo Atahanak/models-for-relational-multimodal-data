@@ -160,3 +160,10 @@ cython_debug/
 #.idea/
 
 wandb/
+
+*.out
+*.err
+
+checkpoint_dir/
+scripts/
+environment_root.yml
