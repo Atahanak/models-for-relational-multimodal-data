@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import numpy as np
 import random
 
+from src.datasets.util.mask import PretrainType
 from torch_frame.data import DataLoader
 from torch_frame import TensorFrame
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
@@ -24,8 +25,8 @@ from src.datasets import IBMTransactionsAML
 from src.nn.gnn import GINe
 from src.nn.gnn import PNA
 from src.nn.models import FTTransformerPNAFused
-from src.utils.loss import lp_loss
-from src.utils.metric import mrr
+from src.utils.loss import SSLoss
+from src.utils.metric import SSMetric
 
 from tqdm import tqdm
 # import wandb
@@ -51,7 +52,7 @@ pos_sample_prob = 1
 num_neg_samples = 64
 channels = 256
 
-pretrain = 'lp'
+pretrain = {PretrainType.LINK_PRED}
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
@@ -141,6 +142,11 @@ val_tensor_frame = val_dataset.tensor_frame
 val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
 test_tensor_frame = test_dataset.tensor_frame
 test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
+
+num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
+
+ssloss = SSLoss(device, num_numerical)
+ssmetric = SSMetric(device)
 
 stype_encoder_dict = {
     stype.categorical: EmbeddingEncoder(),
@@ -248,7 +254,7 @@ def train(epoc: int, model, optimizer) -> float:
             # pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             tf = tf.to(device)
             _, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-            loss = lp_loss(pred, neg_pred)
+            loss = ssloss.lp_loss(pred, neg_pred)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -276,10 +282,10 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             # pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             tf = tf.to(device)
             _, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-            loss = lp_loss(pred, neg_pred)
+            loss = ssloss.lp_loss(pred, neg_pred)
             loss_accum += loss.item() * len(pred)
             total_count += len(pred)
-            mrr_score, hits = mrr(pred, neg_pred, [1,2,5,10], num_neg_samples)
+            mrr_score, hits = ssmetric.mrr(pred, neg_pred, [1,2,5,10], num_neg_samples)
             mrrs.append(mrr_score)
             hits1.append(hits['hits@1'])
             hits2.append(hits['hits@2'])

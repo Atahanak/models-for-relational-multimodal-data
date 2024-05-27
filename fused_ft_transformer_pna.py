@@ -6,6 +6,7 @@ import random
 import torch
 import torch.nn.functional as F
 
+from src.datasets.util.mask import PretrainType
 from torch_frame.data import DataLoader
 from torch_frame import stype
 from torch_frame.nn import (
@@ -21,8 +22,8 @@ from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
 from src.nn.models import FTTransformerPNAFused
-from src.utils.loss import lp_loss
-from src.utils.metric import mrr
+from src.utils.loss import SSLoss
+from src.utils.metric import SSMetric
 
 from tqdm import tqdm
 import wandb
@@ -51,7 +52,7 @@ channels = 128
 num_layers = 3
 dropout = 0.5
 
-pretrain = 'mask+lp'
+pretrain = {PretrainType.MASK, PretrainType.MASK_VECTOR}
 #pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -93,7 +94,7 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-2", 
-    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective={pretrain},only-last-layer-fuse,fusenorm,correct",
+    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=MCM+LP,only-last-layer-fuse,fusenorm,correct",
     #name=f"debug-fused",
     config=args
 )
@@ -150,6 +151,9 @@ num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 num_columns = num_numerical + num_categorical
 ic(num_numerical, num_categorical, num_columns)
+
+ssloss = SSLoss(device, num_numerical)
+ssmetric = SSMetric(device)
 
 # %%
 stype_encoder_dict = {
@@ -352,20 +356,6 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
     return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
 
-# %%
-def calc_loss(cat_pred, num_pred, y):
-    accum_n = accum_c = t_n = t_c = 0
-    for i, ans in enumerate(y):
-        # ans --> [val, idx]
-        if ans[1] > (num_numerical-1):
-            t_c += 1
-            a = torch.tensor(int(ans[0])).to(device)
-            accum_c += F.cross_entropy(cat_pred[int(ans[1])-num_numerical][i], a)
-            del a
-        else:
-            t_n += 1
-            accum_n += torch.square(num_pred[i][int(ans[1])] - ans[0]) #mse
-    return (accum_n / t_n) + torch.sqrt(accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
 
 def optimizer_step(optimizers, losses):
     if len(optimizers) != len(losses):
@@ -392,8 +382,8 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
             tf = tf.to(device)
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-            link_loss = lp_loss(pos_pred, neg_pred)
-            t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y)
+            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             loss = link_loss + t_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
             optimizer_step(optimizer, [loss])
@@ -444,8 +434,8 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False)
             tf = tf.to(device)
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-            link_loss = lp_loss(pos_pred, neg_pred)
-            t_loss, loss_c, loss_n = calc_loss(cat_pred, num_pred, tf.y)
+            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             loss = link_loss + t_loss
             
             t_c += loss_c[1]
@@ -455,7 +445,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             loss_lp_accum += link_loss * len(pos_pred)
             loss_accum += float(loss) * len(pos_pred)
             total_count += len(pos_pred)
-            mrr_score, hits = mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
+            mrr_score, hits = ssmetric.mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
             mrrs.append(mrr_score)
             hits1.append(hits['hits@1'])
             hits2.append(hits['hits@2'])
@@ -573,7 +563,15 @@ for epoch in range(1, epochs + 1):
         val_metric, 
         test_metric
     )
+# Create a directory to save models
+save_dir = '.cache/saved_models'
+run_id = wandb.run.id
+os.makedirs(save_dir, exist_ok=True)
+model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')
 
+# Save the model after each epoch, replacing the old model
+torch.save(model.state_dict(), model_save_path)
+ic(f'Model saved to {model_save_path}')
 # %%
 wandb.finish()
 

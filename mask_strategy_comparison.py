@@ -2,7 +2,7 @@
 import torch
 import torch.nn.functional as F
 
-from datasets.util.mask import PretrainType
+from src.datasets.util.mask import PretrainType
 from torch_frame import stype
 from torch_frame.data import DataLoader
 from torch_frame.nn import (
