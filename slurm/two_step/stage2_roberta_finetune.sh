@@ -7,7 +7,7 @@ batch_size_tokenizer=50000
 epochs=50
 task_type="regression"
 model_name="roberta"
-text_model="/home/$USER/cse3000/checkpoints/checkpoint-22500"
+text_model="/home/$USER/cse3000/checkpoint_dir/st1_roberta_rows2000000_bs-emb128_ep50_r16_cpus1_mem30GB_gpu/checkpoint-51000"
 root="/scratch/$USER/AML_dataset/AMAZON_FASHION.csv"
 
 cpus_per_task=15
@@ -47,7 +47,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --text_model=$text_model --task_type=$task_type --epochs=$epochs --batch_size=$batch_size --batch_size_embedder=$batch_size_embedder --script_path=$generated_script_path --finetune --root=$root
+srun python /home/$USER/cse3000/downstream_model_LLM.py --name=$job_name --nrows=$nrows --text_model=$text_model --task_type=$task_type --epochs=$epochs --batch_size=$batch_size --batch_size_tokenizer=$batch_size_tokenizer --script_path=$generated_script_path --finetune --root=$root
 
 conda deactivate
 EOT
