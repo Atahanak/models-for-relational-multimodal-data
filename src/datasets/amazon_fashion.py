@@ -59,7 +59,7 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
         # Set the root to None to install/pre-process the dataset
         if root is None:
             self.retrieve_dataset()
-            root = "datasets/AMAZON_FASHION.csv"
+            root = ".cache/datasets/AMAZON_FASHION.csv"
 
         self.root = root
         self.split_type = split_type
@@ -331,10 +331,10 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
 
     def retrieve_dataset(self):
         url = "https://datarepo.eng.ucsd.edu/mcauley_group/data/amazon_v2/categoryFiles/AMAZON_FASHION.json.gz"
-        output_directory = "datasets/"
+        output_directory = ".cache/datasets/"
 
         if not os.path.exists(output_directory):
-            os.makedirs(output_directory)
+            os.makedirs(output_directory, exist_ok=True)
 
         file_name = url.split('/')[-1]
         download_path = os.path.join(output_directory, file_name)

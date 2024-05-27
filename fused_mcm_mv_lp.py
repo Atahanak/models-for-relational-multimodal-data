@@ -50,7 +50,7 @@ channels = 128
 num_layers = 3
 dropout = 0.5
 
-pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
+pretrain = {PretrainType.MASK, PretrainType.LINK_PRED, PretrainType.MASK_VECTOR}
 #pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -365,10 +365,11 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             #wandb.log({"lr": updated_lr})
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
             tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred, mv_out, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            loss = link_loss + t_loss
+            mv_loss = ssloss.mv_loss(mv_out, tf.y)
+            loss = link_loss + t_loss + mv_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
             optimizer_step(optimizer, [loss])
             #optimizer.zero_grad()
@@ -396,7 +397,7 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             del t_loss
             del loss_c
             del loss_n
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n, "mv_loss": mv_loss})
         #optimizer.state.clear()
     return {'loss': loss_accum / total_count}
 
@@ -418,10 +419,11 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         for tf in t:
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False)
             tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred, mv_out, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            loss = link_loss + t_loss
+            mv_loss = ssloss.mv_loss(mv_out, tf.y)
+            loss = link_loss + t_loss + mv_loss
             
             t_c += loss_c[1]
             t_n += loss_n[1] 
@@ -431,6 +433,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             loss_accum += float(loss) * len(pos_pred)
             total_count += len(pos_pred)
             mrr_score, hits = ssmetric.mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
+            mv_acc = ssmetric.mv_accuracy(mv_out, tf.y)
             mrrs.append(mrr_score)
             hits1.append(hits['hits@1'])
             hits2.append(hits['hits@2'])
@@ -451,6 +454,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 hits10=f'{np.mean(hits10):.4f}',
                 accuracy=f'{accum_acc / t_c:.4f}',
                 rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}', 
+                mv_accuracy=f'{mv_acc:.4f}',
                 loss_mcm=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}',
                 loss_c = f'{loss_c_accum/t_c:.4f}', 
                 loss_n = f'{loss_n_accum/t_n:.4f}',
@@ -468,6 +472,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 f"{dataset_name}_loss_c": loss_c_accum/t_c,
                 f"{dataset_name}_loss_n": loss_n_accum/t_n,
                 f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+                f"{dataset_name}_loss_mv": mv_loss
             })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
@@ -496,7 +501,7 @@ model = FTTransformerGINeFused(
     edge_dim=channels*train_dataset.tensor_frame.num_cols,
     num_layers=num_layers, 
     dropout=dropout,
-    pretrain=True
+    pretrain=pretrain
 )
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)

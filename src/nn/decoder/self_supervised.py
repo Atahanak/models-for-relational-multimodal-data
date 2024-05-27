@@ -75,6 +75,34 @@ class SelfSupervisedMVHead(Module):
         num_out, cat_out = self.mcm_decoder(x_cls)
         mv_out = self.mask_vector_decoder(x_cls)
         return num_out, cat_out, mv_out
+    
+
+class SelfSupervised_MCM_MV_LP_Head(Module):
+    r"""Used for pretraining the FT-Transformer model with mask vector prediction"""
+
+    def __init__(self, channels: int, num_numerical: int, num_categorical: list[int], nhidden: int, dropout: float) -> None:
+        super().__init__()
+        self.mv_decoder = SelfSupervisedMVHead(channels, num_numerical, num_categorical)
+        self.lp_decoder = LinkPredHead(n_hidden=nhidden, final_dropout=dropout)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        self.mv_decoder.reset_parameters()
+        self.lp_decoder.reset_parameters()
+
+    def forward(self, x_cls: Tensor, x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) -> tuple[Tensor, list[Tensor], Tensor]:
+        r"""Forward pass.
+
+        Args:
+            x_cls (torch.Tensor): Output of the transformer.
+
+        Returns:
+            tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]: Numerical and categorical
+            outputs, and the prediction of the mask vector.
+        """
+        num_out, cat_out, mv_out = self.mv_out(x_cls)
+        pos_pred, neg_pred = self.lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+        return num_out, cat_out, mv_out, pos_pred, neg_pred
 
 
 class SelfSupervisedLPHead(Module):
