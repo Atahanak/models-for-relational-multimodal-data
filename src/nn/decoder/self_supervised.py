@@ -100,7 +100,7 @@ class SelfSupervised_MCM_MV_LP_Head(Module):
             tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]: Numerical and categorical
             outputs, and the prediction of the mask vector.
         """
-        num_out, cat_out, mv_out = self.mv_out(x_cls)
+        num_out, cat_out, mv_out = self.mv_decoder(x_cls)
         pos_pred, neg_pred = self.lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
         return num_out, cat_out, mv_out, pos_pred, neg_pred
 

@@ -81,10 +81,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
-            self.df = apply_split(self.df, self.split_type, self.splits)
+            self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
 
             # Apply input corruption
             if pretrain:
+                # Create mask vector
                 mask = self.create_mask(num_columns + cat_columns)
                 self.df["maskable_column"] = mask
                 for transformation in pretrain:
@@ -93,14 +94,14 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 self.df = self.df.drop('maskable_column', axis=1)
 
             # Define target column to predict
-            col_to_stype = set_target_col(self, pretrain, col_to_stype)
+            col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
 
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
         def create_mask(self, maskable_columns: list[str]):
             # Generate which columns to mask and store in file for reproducibility across different runs
             os.makedirs(".cache", exist_ok=True)
-            dir_masked_columns = ".cache/masked_columns.npy"
+            dir_masked_columns = ".cache/IBM_AML_masked_columns.npy"
             if os.path.exists(dir_masked_columns):
                 mask = np.load(dir_masked_columns)
             else:

@@ -18,6 +18,8 @@ from torch_geometric.sampler import EdgeSamplerInput
 from torch_frame.config.text_embedder import TextEmbedderConfig
 from torch_frame.config.text_tokenizer import TextTokenizerConfig
 
+from src.datasets.util.mask import PretrainType, apply_transformation, set_target_col
+from src.datasets.util.split import apply_split
 
 class AmazonFashionDataset(torch_frame.data.Dataset):
     """
@@ -45,7 +47,7 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
     def __init__(
             self, 
             root=None, 
-            pretrain='', 
+            pretrain: set[PretrainType]=set(), 
             split_type='random', 
             splits=[0.8, 0.1, 0.1],
             khop_neighbors=[100, 100],
@@ -54,7 +56,8 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
             | TextEmbedderConfig | None = None,
             col_to_text_tokenizer_cfg: dict[str, TextTokenizerConfig]
             | TextTokenizerConfig | None = None,
-            nrows=None
+            nrows=None,
+            mask_type="replace"
             ):
         # Set the root to None to install/pre-process the dataset
         if root is None:
@@ -72,8 +75,14 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
                              f"got {text_stype}.")
 
         names = [
-            'overall', 'verified', 'reviewerID', 'asin', 'reviewText', 'summary',
-            'unixReviewTime', 'vote',
+            'overall', 
+            'verified', 
+            'reviewerID', 
+            'asin', 
+            'reviewText', 
+            'summary',
+            'unixReviewTime', 
+            'vote',
         ]
         dtypes = {
             'overall': 'float32',
@@ -105,169 +114,51 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
             'vote': torch_frame.numerical,  # Numerical votes count
             # 'style': torch_frame.multicategorical  # If 'style' contains multiple categorical data or key-value pairs
         }
+        num_columns = ["vote"]
+        cat_columns = ["verified"]
 
-        if self.split_type == 'temporal':
-            self.temporal_balanced_split()
-        elif self.split_type == 'temporal_balanced':
-            self.temporal_balanced_split()
-        else:
-            self.random_split()
+        self.df = apply_split(
+            df=self.df, 
+            split_type=self.split_type, 
+            splits=self.splits,
+            timestamp_col='unixReviewTime')
+        
+        if pretrain:
+            # Create mask vector
+            mask = self.create_mask(num_columns + cat_columns)
+            self.df["maskable_column"] = mask
+            # Prepare for LP - this is were custom code can go before applying the transformation(s) to the data
+            if PretrainType.LINK_PRED in pretrain:
+                # Convert strings to ints
+                unique_ids = pd.concat([self.df['reviewerID'], self.df['asin']]).unique()
+                self.id_map = {original_id: i for i, original_id in enumerate(unique_ids)}
+                # Now use this map to update 'From ID' and 'To ID' in the DataFrame to use these new IDs
+                self.df['reviewerID'] = self.df['reviewerID'].map(self.id_map)
+                self.df['asin'] = self.df['asin'].map(self.id_map)
+            for transformation in pretrain:
+                col_to_stype = apply_transformation(self, "reviewerID", "asin", cat_columns, num_columns, col_to_stype, transformation, mask_type)
+            # Remove columns that are not needed
+            self.df = self.df.drop('maskable_column', axis=1)
 
-        if 'mask' in pretrain:
-            maskable_columns = ['verified', 'vote']
-            self.df['mask'] = None
-            self.df = self.df.apply(self.mask_column, args=(maskable_columns,), axis=1)
-            col_to_stype['mask'] = torch_frame.mask
-
-        self.sampler = None
-        if 'lp' in pretrain:  # initialize training graph and neighbor sampler
-            # Convert strings to ints
-            unique_ids = pd.concat([self.df['reviewerID'], self.df['asin']]).unique()
-            self.id_map = {original_id: i for i, original_id in enumerate(unique_ids)}
-            # Now use this map to update 'From ID' and 'To ID' in the DataFrame to use these new IDs
-            self.df['reviewerID'] = self.df['reviewerID'].map(self.id_map)
-            self.df['asin'] = self.df['asin'].map(self.id_map)
-
-            self.df['link'] = self.df[['reviewerID', 'asin']].apply(list, axis=1)
-            col_to_stype['link'] = torch_frame.relation
-
-            def append_index_to_link(row):
-                row['link'].append(float(row.name))
-                return row
-
-            self.df = self.df.apply(append_index_to_link, axis=1)
-
-            # get number of uique ids in the dataset
-            num_nodes = len(set(self.df['reviewerID'].to_list() + self.df['asin'].to_list()))
-
-            # init train and val graph
-            self.edges = self.df['link'].to_numpy()
-            self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
-            # self.train_edges = self.edges
-            # val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
-
-            source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
-            destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
-            ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
-            train_edge_index = torch.stack([source, destination], dim=0)
-            x = torch.arange(num_nodes)
-            self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
-            self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
-
-            # remove reviewerID and asin columns from the dataframe and col_to_stype
-            self.df = self.df.drop(columns=['reviewerID', 'asin'])
-            del col_to_stype['reviewerID']
-            del col_to_stype['asin']
-
-        if pretrain == 'lp':
-            self.target_col = 'link'
-        elif pretrain == 'mask':
-            self.target_col = 'mask'
-        elif pretrain == 'lp+mask' or pretrain == 'mask+lp':
-            # merge link and mask columns into a column called target
-            self.df['target'] = self.df['mask'] + self.df['link']
-            col_to_stype['target'] = torch_frame.mask
-            self.target_col = 'target'
-            ic(self.df['link'][0:5])
-            ic(self.df['mask'][0:5])
-            ic(self.df['target'][0:5])
-            self.df = self.df.drop(columns=['link', 'mask'])
-            del col_to_stype['link']
-            del col_to_stype['mask']
-        else:
-            col_to_stype['overall'] = torch_frame.numerical
-            self.target_col = 'overall'
+        # Define target column to predict
+        col_to_stype = set_target_col(self, pretrain, col_to_stype, "overall")
 
         super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col,
                          col_to_text_embedder_cfg=col_to_text_embedder_cfg,
                          col_to_text_tokenizer_cfg=col_to_text_tokenizer_cfg)
 
-    def random_split(self):
-        self.df['split'] = torch_frame.utils.generate_random_split(length=len(self.df), seed=0, train_ratio=self.splits[0], val_ratio=self.splits[1])
-
-
-    def temporal_split(self):
-        assert 'unixReviewTime' in self.df.columns, \
-            'split is only available for datasets with a "unixReviewTime" column'
-        self.df = self.df.sort_values(by='unixReviewTime')
-        train_size = int(self.df.shape[0] * 0.3)
-        validation_size = int(self.df.shape[0] * 0.1)
-        test_size = self.df.shape[0] - train_size - validation_size
-
-        # add split column, use 0 for train, 1 for validation, 2 for test
-        self.df['split'] = [0] * train_size + [1] * validation_size + [2] * test_size
-
-    def temporal_balanced_split(self):
-        assert 'unixReviewTime' in self.df.columns, \
-            'split is only available for datasets with a "reviewTime" column'
-        self.df['unixReviewTime'] = self.df['unixReviewTime'] - self.df['unixReviewTime'].min()
-
-        timestamps = torch.Tensor(self.df['unixReviewTime'].to_numpy())
-        n_days = int(timestamps.max() / (3600 * 24) + 1)
-
-        daily_inds, daily_reviews = [], []  # irs = illicit ratios, inds = indices, reviews = reviews
-        for day in range(n_days):
-            l = day * 24 * 3600
-            r = (day + 1) * 24 * 3600
-            day_inds = torch.where((timestamps >= l) & (timestamps < r))[0]
-            daily_inds.append(day_inds)
-            daily_reviews.append(day_inds.shape[0])
-
-        split_per = self.splits
-        daily_totals = np.array(daily_reviews)
-        d_ts = daily_totals
-        I = list(range(len(d_ts)))
-        split_scores = dict()
-        for i, j in itertools.combinations(I, 2):
-            if j >= i:
-                split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
-                split_totals_sum = np.sum(split_totals)
-                split_props = [v / split_totals_sum for v in split_totals]
-                split_error = [abs(v - t) / t for v, t in zip(split_props, split_per)]
-                score = max(split_error)
-                split_scores[(i, j)] = score
-
-        i, j = min(split_scores, key=split_scores.get)
-        # split contains a list for each split (train, validation and test) and each list contains the days that are
-        # part of the respective split
-        split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
-
-        # Now, we separate the reviews based on their indices in the timestamp array
-        split_inds = {k: [] for k in range(3)}
-        for i in range(3):
-            for day in split[i]:
-                if daily_inds[day].numel() > 0:
-                    # print(daily_inds[day])
-                    temp_tensor = daily_inds[day].unsqueeze(0)
-                    split_inds[i].extend(temp_tensor)  # split_inds contains a list for each split (tr, val, te) which
-                    # contains the indices of each day separately
-
-        # print(f"Train indices: {len(split_inds[0])}")  # Debug print
-        # print(f"Validation indices: {len(split_inds[1])}")  # Debug print
-        # print(f"Test indices: {len(split_inds[2])}")  # Debug print
-        # for i, tensor in enumerate(split_inds[1][:30]):
-        #     print(f"Tensor {i}: shape={tensor.shape}, dtype={tensor.dtype}, numel={tensor.numel()}")
-
-        # add a new split column to df
-        self.df['split'] = 0
-
-        # Set values for val_inds and te_inds
-        self.df.loc[torch.cat(split_inds[1]), 'split'] = 1
-        self.df.loc[torch.cat(split_inds[2]), 'split'] = 2
-
-    # Randomly mask a column of each row and store original value and max index
-    def mask_column(self, row, maskable_cols):
-        col_to_mask = np.random.choice(maskable_cols)  # Choose a column randomly
-        original_value = row[col_to_mask]
-        row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
-
-        # row[col_to_mask] = np.nan
-        # hack to escape nan error in torch_frame
-        if col_to_mask in ['overall', 'vote']:
-            row[col_to_mask] = -1
+    
+    def create_mask(self, maskable_columns: list[str]):
+        # Generate which columns to mask and store in file for reproducibility across different runs
+        os.makedirs(".cache", exist_ok=True)
+        dir_masked_columns = ".cache/Amazon_Fashion_masked_columns.npy"
+        if os.path.exists(dir_masked_columns):
+            mask = np.load(dir_masked_columns)
         else:
-            row[col_to_mask] = '[MASK]'
-        return row
+            # maskable_columns = num_columns + cat_columns
+            mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
+            np.save(dir_masked_columns, mask)
+        return mask
 
     def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
         """k-hop sampling.

@@ -6,23 +6,23 @@ import numpy as np
 import itertools
 
 
-def apply_split(df: pd.DataFrame, split_type: str, splits: list) -> pd.DataFrame:
+def apply_split(df: pd.DataFrame, split_type: str, splits: list, timestamp_col: str) -> pd.DataFrame:
     if split_type == 'temporal':
-        df = temporal_balanced_split(df, splits)
+        df = temporal_balanced_split(df, splits, timestamp_col)
     else:
-        df = random_split(df)
+        df = random_split(df, splits)
     return df
 
 
-def random_split(df: pd.DataFrame, seed=42) -> pd.DataFrame:
-    df['split'] = torch_frame.utils.generate_random_split(df.shape[0], seed)
+def random_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
+    df['split'] = torch_frame.utils.generate_random_split(length=len(df), seed=0, train_ratio=splits[0], val_ratio=splits[1])
     return df
 
 
-def temporal_split(df: pd.DataFrame) -> pd.DataFrame:
-    assert 'Timestamp' in df.columns, \
+def temporal_split(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
+    assert timestamp_col in df.columns, \
         '"transaction" split is only available for datasets with a "Timestamp" column'
-    df = df.sort_values(by='Timestamp')
+    df = df.sort_values(by=timestamp_col)
     train_size = int(df.shape[0] * 0.3)
     validation_size = int(df.shape[0] * 0.1)
     test_size = df.shape[0] - train_size - validation_size
@@ -32,12 +32,12 @@ def temporal_split(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def temporal_balanced_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
-    assert 'Timestamp' in df.columns, \
-        '"transaction" split is only available for datasets with a "Timestamp" column'
-    df['Timestamp'] = df['Timestamp'] - df['Timestamp'].min()
+def temporal_balanced_split(df: pd.DataFrame, splits: list, timestamp_col: str) -> pd.DataFrame:
+    assert timestamp_col in df.columns, \
+        f"Split is only available for datasets with a {timestamp_col} column."
+    df[timestamp_col] = df[timestamp_col] - df[timestamp_col].min()
 
-    timestamps = torch.Tensor(df['Timestamp'].to_numpy())
+    timestamps = torch.Tensor(df[timestamp_col].to_numpy())
     n_days = int(timestamps.max() / (3600 * 24) + 1)
 
     daily_inds, daily_trans = [], []  # irs = illicit ratios, inds = indices, trans = transactions
@@ -76,6 +76,15 @@ def temporal_balanced_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
         for day in split[i]:
             split_inds[i].append(daily_inds[
                                      day])  # split_inds contains a list for each split (tr,val,te) which contains the indices of each day seperately
+    # According to Efe, the above code might break on Amazon Fashion, so try this instead:
+    # split_inds = {k: [] for k in range(3)}
+    #     for i in range(3):
+    #         for day in split[i]:
+    #             if daily_inds[day].numel() > 0:
+    #                 # print(daily_inds[day])
+    #                 temp_tensor = daily_inds[day].unsqueeze(0)
+    #                 split_inds[i].extend(temp_tensor)  # split_inds contains a list for each split (tr, val, te) which
+    #                 # contains the indices of each day separately
 
     # tr_inds = torch.cat(split_inds[0])
     val_inds = torch.cat(split_inds[1])

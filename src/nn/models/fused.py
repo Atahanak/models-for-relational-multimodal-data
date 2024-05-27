@@ -161,7 +161,7 @@ class FTTransformerGINeFused(Module):
             # Only currently accomdates combinations of {MCM + LP} and {MCM + LP + MV}
             num_numerical = len(col_names_dict[stype.numerical]) if stype.numerical in col_names_dict else 0 
             num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]] if stype.categorical in col_names_dict else 0
-            if pretrain == {PretrainType.MCM, PretrainType.MV, PretrainType.LP}:
+            if pretrain == {PretrainType.MASK, PretrainType.MASK_VECTOR, PretrainType.LINK_PRED}:
                 self.decoder = SelfSupervised_MCM_MV_LP_Head(
                     channels=channels, 
                     num_numerical=num_numerical, 
