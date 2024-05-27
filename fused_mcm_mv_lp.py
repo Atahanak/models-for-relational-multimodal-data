@@ -18,10 +18,8 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 from torch_frame import NAStrategy
 from torch_frame import TensorFrame
 
-from torch_geometric.utils import degree
-
 from src.datasets import IBMTransactionsAML
-from src.nn.models import FTTransformerPNAFused
+from src.nn.models import FTTransformerGINeFused
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
 
@@ -52,7 +50,7 @@ channels = 128
 num_layers = 3
 dropout = 0.5
 
-pretrain = {PretrainType.MASK, PretrainType.MASK_VECTOR}
+pretrain = {PretrainType.MASK, PretrainType.LINK_PRED, PretrainType.MASK_VECTOR}
 #pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -91,19 +89,19 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 # %%
 wandb.login()
 run = wandb.init(
-    dir="/mnt/data/",
+    # dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm-2", 
-    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=MCM+LP,only-last-layer-fuse,fusenorm,correct",
+    project=f"rel-mm", 
+    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=MCM+MV+LP,only-last-layer-fuse,fusenorm,correct",
     #name=f"debug-fused",
     config=args
 )
 
 # %%
 dataset = IBMTransactionsAML(
+    root='/scratch/imcauliffe/AML_dataset_preprocessed/HI-Small_Trans-c.csv',
     # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     pretrain=pretrain, 
     split_type=split_type, 
     splits=data_split, 
@@ -114,19 +112,6 @@ dataset.materialize()
 dataset.df.head(5)
 train_dataset, val_dataset, test_dataset = dataset.split()
 ic(len(train_dataset), len(val_dataset), len(test_dataset))
-
-edge_index = dataset.train_graph.edge_index
-num_nodes = dataset.train_graph.num_nodes
-
-# Compute the in-degree for each node
-in_degrees = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
-
-# Compute the maximum in-degree
-max_in_degree = int(in_degrees.max())
-
-# Create a histogram tensor for in-degrees
-in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
-in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
 
 # %%
 def seed_worker(worker_id):
@@ -373,7 +358,6 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
-
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             # Get the updated learning rate and log it
@@ -381,10 +365,11 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             #wandb.log({"lr": updated_lr})
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
             tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred, mv_out, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            loss = link_loss + t_loss
+            mv_loss = ssloss.mv_loss(mv_out, tf.y)
+            loss = link_loss + t_loss + mv_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
             optimizer_step(optimizer, [loss])
             #optimizer.zero_grad()
@@ -412,7 +397,7 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             del t_loss
             del loss_c
             del loss_n
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n, "mv_loss": mv_loss})
         #optimizer.state.clear()
     return {'loss': loss_accum / total_count}
 
@@ -429,14 +414,16 @@ def test(loader: DataLoader, model, dataset_name) -> float:
     accum_acc = accum_l2 = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
     t_n = t_c = 0
+
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False)
             tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred, mv_out, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            loss = link_loss + t_loss
+            mv_loss = ssloss.mv_loss(mv_out, tf.y)
+            loss = link_loss + t_loss + mv_loss
             
             t_c += loss_c[1]
             t_n += loss_n[1] 
@@ -446,6 +433,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             loss_accum += float(loss) * len(pos_pred)
             total_count += len(pos_pred)
             mrr_score, hits = ssmetric.mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
+            mv_acc = ssmetric.mv_accuracy(mv_out, tf.y)
             mrrs.append(mrr_score)
             hits1.append(hits['hits@1'])
             hits2.append(hits['hits@2'])
@@ -466,6 +454,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 hits10=f'{np.mean(hits10):.4f}',
                 accuracy=f'{accum_acc / t_c:.4f}',
                 rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}', 
+                mv_accuracy=f'{mv_acc:.4f}',
                 loss_mcm=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}',
                 loss_c = f'{loss_c_accum/t_c:.4f}', 
                 loss_n = f'{loss_n_accum/t_n:.4f}',
@@ -483,6 +472,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 f"{dataset_name}_loss_c": loss_c_accum/t_c,
                 f"{dataset_name}_loss_n": loss_n_accum/t_n,
                 f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+                f"{dataset_name}_loss_mv": mv_loss
             })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
@@ -503,7 +493,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
 # %%
-model = FTTransformerPNAFused(
+model = FTTransformerGINeFused(
     channels=channels,
     out_channels=None,
     col_stats=dataset.col_stats,
@@ -511,8 +501,7 @@ model = FTTransformerPNAFused(
     edge_dim=channels*train_dataset.tensor_frame.num_cols,
     num_layers=num_layers, 
     dropout=dropout,
-    pretrain=True,
-    deg=in_degree_histogram
+    pretrain=pretrain
 )
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)

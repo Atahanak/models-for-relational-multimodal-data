@@ -18,6 +18,7 @@ from torch.nn import (
     TransformerEncoderLayer,
 )
 
+from src.datasets.util.mask import PretrainType
 import torch_frame
 from torch_frame import TensorFrame, stype
 from torch_frame.data.stats import StatType
@@ -34,6 +35,7 @@ from torch_geometric.nn import BatchNorm
 
 from ..decoder import SelfSupervisedLPHead
 from ..decoder import SupervisedHead
+from ..decoder import SelfSupervised_MCM_MV_LP_Head
 
 from icecream import ic
 import sys
@@ -83,7 +85,7 @@ class FTTransformerPNAFused(Module):
         stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
         
         # training parameters
-        pretrain: bool = False,
+        pretrain: set[PretrainType] = False,
 
         
         # PNA parameters
@@ -160,14 +162,24 @@ class FTTransformerPNAFused(Module):
                 )
 
         if pretrain:
+            # Only currently accomdates combinations of {MCM + LP} and {MCM + LP + MV}
             num_numerical = len(col_names_dict[stype.numerical]) if stype.numerical in col_names_dict else 0 
             num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]] if stype.categorical in col_names_dict else 0
-            self.decoder = SelfSupervisedLPHead(
-                channels=channels, 
-                num_numerical=num_numerical, 
-                num_categorical=num_categorical, 
-                nhidden=nhidden, 
-                dropout=final_dropout
+            if pretrain == {PretrainType.MASK, PretrainType.MASK_VECTOR, PretrainType.LINK_PRED}:
+                self.decoder = SelfSupervised_MCM_MV_LP_Head(
+                    channels=channels, 
+                    num_numerical=num_numerical, 
+                    num_categorical=num_categorical, 
+                    nhidden=nhidden, 
+                    dropout=final_dropout
+                )
+            else:
+                self.decoder = SelfSupervisedLPHead(
+                    channels=channels, 
+                    num_numerical=num_numerical, 
+                    num_categorical=num_categorical, 
+                    nhidden=nhidden, 
+                    dropout=final_dropout
             )
         else:
             self.decoder = SupervisedHead(channels, out_channels)

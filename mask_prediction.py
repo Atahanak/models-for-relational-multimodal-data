@@ -2,7 +2,7 @@
 import torch
 import torch.nn.functional as F
 
-from datasets.util.mask import PretrainType
+from src.datasets.util.mask import PretrainType
 from torch_frame import stype
 from torch_frame.data import DataLoader
 from torch_frame.nn import (
@@ -20,7 +20,8 @@ from icecream import ic
 import wandb
 import pandas as pd
 
-from utils import SSLoss, SSMetric
+from src.utils.loss import SSLoss
+from src.utils.metric import SSMetric
 
 torch.set_float32_matmul_precision('high')
 pd.set_option('display.max_columns', None)
@@ -110,6 +111,9 @@ wandb.log({
     "test_loader size": len(test_loader)
 })
 
+ssloss = SSLoss(device, num_numerical)
+ssmetric = SSMetric(device)
+
 # %%
 
 stype_encoder_dict = {
@@ -148,14 +152,13 @@ scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1
 
 def train(epoc: int) -> float:
     model.train()
-    ssloss = SSLoss(device, num_numerical)
     loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             tf = tf.to(device)
             num_out, cat_out, mv_out = model(tf)
-            mcm_loss, loss_c, loss_n = ssloss.mcm_loss(num_out, cat_out, tf.y)
+            mcm_loss, loss_c, loss_n = ssloss.mcm_loss(cat_out, num_out, tf.y)
             mv_loss = ssloss.mv_loss(mv_out, tf.y)
             loss = mcm_loss + mv_loss
             optimizer.zero_grad()
@@ -186,8 +189,6 @@ def train(epoc: int) -> float:
 @torch.no_grad()
 def test(loader: DataLoader, dataset_name) -> float:
     model.eval()
-    ssloss = SSLoss(device, num_numerical)
-    ssmetric = SSMetric(num_numerical)
     accum_acc = accum_l2 = 0
     loss_c_accum = loss_n_accum = 0
     t_n = t_c = 0
@@ -195,7 +196,7 @@ def test(loader: DataLoader, dataset_name) -> float:
         for tf in t:
             tf = tf.to(device)
             num_out, cat_out, mv_out = model(tf)
-            _, loss_c, loss_n = ssloss.mcm_loss(num_out, cat_out, tf.y)
+            _, loss_c, loss_n = ssloss.mcm_loss(cat_out, num_out, tf.y)
             mv_loss = ssloss.mv_loss(mv_out, tf.y)
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
@@ -255,7 +256,7 @@ for epoch in range(1, epochs + 1):
     )
 
 # Create a directory to save models
-save_dir = '/scratch/imcauliffe/saved_models'
+save_dir = '.cache/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')

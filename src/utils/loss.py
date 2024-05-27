@@ -12,7 +12,7 @@ class SSLoss:
     def lp_loss(pos_pred, neg_pred):
         return -torch.log(pos_pred + 1e-12).mean() - torch.log(1 - neg_pred + 1e-12).mean()
 
-    def mcm_loss(self, num_out, cat_out, y):
+    def mcm_loss(self, cat_out, num_out, y):
         accum_n = accum_c = t_n = t_c = 0
         for i, ans in enumerate(y):
             # ans --> [val, idx]

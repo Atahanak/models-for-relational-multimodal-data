@@ -28,20 +28,22 @@ def apply_transformation(self: torch_frame.data.Dataset,
         return col_to_stype
         # no need to do anything, as we already store all necessary information in the mask column
         # return apply_mask_vector(self, col_to_stype)
+        # NOTE: this means that if you use MASK_VECTOR, you MUST also use MASK
     else:
         return apply_link_pred(self, src_column, dst_column, col_to_stype)
 
 
 def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
-                   col_to_stype: dict[str, torch_frame.stype]) -> dict[str, torch_frame.stype]:
+                   col_to_stype: dict[str, torch_frame.stype], supervised_col: str) -> dict[str, torch_frame.stype]:
     # Handle supervised column
-    if pretrain is None:
-        col_to_stype['Is Laundering'] = torch_frame.categorical
-        self.target_col = 'Is Laundering'
+    if not pretrain:
+        col_to_stype[supervised_col] = torch_frame.categorical
+        self.target_col = supervised_col
         return col_to_stype
 
     # Handle pretrain columns
     if {PretrainType.MASK, PretrainType.LINK_PRED}.issubset(pretrain):
+        # Handles combinations of {MCM+MV+LP} and {MCM+LP}
         # merge link and mask columns into a column called target
         self.df['target'] = self.df['mask'] + self.df['link']
         col_to_stype['target'] = torch_frame.mask
@@ -53,6 +55,7 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         del col_to_stype['link']
         del col_to_stype['mask']
     elif PretrainType.MASK in pretrain:
+        # Handles combinations of {MCM+MV} and {MCM}
         self.target_col = 'mask'
     elif PretrainType.LINK_PRED in pretrain:
         self.target_col = 'link'

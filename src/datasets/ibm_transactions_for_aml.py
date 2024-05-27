@@ -34,7 +34,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type, pretrain: set[PretrainType] = None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -80,30 +80,35 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             num_columns = ['Amount Received', 'Amount Paid']
             cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
-            # Generate which columns to mask and store in file for reproducibility across different runs
-            if os.path.exists("/scratch/imcauliffe/masked_columns.npy"):
-                mask = np.load("/scratch/imcauliffe/masked_columns.npy")
-            else:
-                maskable_columns = num_columns + cat_columns
-                mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
-                np.save("/scratch/imcauliffe/masked_columns.npy", mask)
-
             # Split into train, validation, test sets
-            self.df = apply_split(self.df, self.split_type, self.splits)
+            self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
 
             # Apply input corruption
-            self.df["maskable_column"] = mask
             if pretrain:
+                # Create mask vector
+                mask = self.create_mask(num_columns + cat_columns)
+                self.df["maskable_column"] = mask
                 for transformation in pretrain:
                     col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
+                # Remove columns that are not needed
+                self.df = self.df.drop('maskable_column', axis=1)
 
             # Define target column to predict
-            col_to_stype = set_target_col(self, pretrain, col_to_stype)
-
-            # Remove columns that are not needed
-            self.df = self.df.drop('maskable_column', axis=1)
+            col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
 
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
+
+        def create_mask(self, maskable_columns: list[str]):
+            # Generate which columns to mask and store in file for reproducibility across different runs
+            os.makedirs(".cache/masked_columns", exist_ok=True)
+            dir_masked_columns = ".cache/masked_columns/IBM_AML.npy"
+            if os.path.exists(dir_masked_columns):
+                mask = np.load(dir_masked_columns)
+            else:
+                # maskable_columns = num_columns + cat_columns
+                mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
+                np.save(dir_masked_columns, mask)
+            return mask
 
         def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
             """k-hop sampling.

@@ -10,8 +10,9 @@ from torch_frame.nn import (
 )
 from tqdm import tqdm
 
+from src.datasets.util.mask import PretrainType
 from transformers import get_inverse_sqrt_schedule
-
+import os
 import sys
 from icecream import ic
 import wandb
@@ -230,7 +231,15 @@ for epoch in range(1, epochs + 1):
         val_metric, 
         test_metric
     )
+# Create a directory to save models
+save_dir = '.cache/saved_models'
+run_id = wandb.run.id
+os.makedirs(save_dir, exist_ok=True)
+model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')
 
+# Save the model after each epoch, replacing the old model
+torch.save(model.state_dict(), model_save_path)
+ic(f'Model saved to {model_save_path}')
 # %%
 wandb.finish()
 
