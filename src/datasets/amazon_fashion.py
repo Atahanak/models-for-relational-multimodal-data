@@ -150,8 +150,8 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
     
     def create_mask(self, maskable_columns: list[str]):
         # Generate which columns to mask and store in file for reproducibility across different runs
-        os.makedirs(".cache", exist_ok=True)
-        dir_masked_columns = ".cache/Amazon_Fashion_masked_columns.npy"
+        os.makedirs(".cache/masked_columns", exist_ok=True)
+        dir_masked_columns = ".cache/masked_columns/Amazon_Fashion.npy"
         if os.path.exists(dir_masked_columns):
             mask = np.load(dir_masked_columns)
         else:
