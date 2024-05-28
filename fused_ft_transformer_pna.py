@@ -24,6 +24,7 @@ from src.datasets import IBMTransactionsAML
 from src.nn.models import FTTransformerPNAFused
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
+from src.nn.weighting.MoCo import MoCoLoss
 
 from tqdm import tqdm
 import wandb
@@ -52,7 +53,7 @@ channels = 128
 num_layers = 3
 dropout = 0.5
 
-pretrain = {PretrainType.MASK, PretrainType.MASK_VECTOR}
+pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
 #pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -93,17 +94,17 @@ wandb.login()
 run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm-2", 
-    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=MCM+LP,only-last-layer-fuse,fusenorm,correct",
+    project=f"rel-mm-3", 
+    name=f"last-layer-notfused-moco",
     #name=f"debug-fused",
     config=args
 )
 
 # %%
 dataset = IBMTransactionsAML(
-    # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
+    #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     pretrain=pretrain, 
     split_type=split_type, 
     splits=data_split, 
@@ -384,12 +385,13 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+            loss = mocoloss.loss([link_loss, t_loss])
             loss = link_loss + t_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
-            optimizer_step(optimizer, [loss])
+            #optimizer_step(optimizer, [loss])
             #optimizer.zero_grad()
             #loss.backward()
-            #optimizer.step()
+            optimizer.step()
             #scheduler.step()
 
             loss_accum += (loss.item() * len(pos_pred))
@@ -516,6 +518,7 @@ model = FTTransformerPNAFused(
 )
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
+mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 ic(learnable_params)
 wandb.log({"learnable_params": learnable_params})
@@ -552,7 +555,8 @@ scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer_mcm, base_lr=lr, max_lr=
 
 torch.autograd.set_detect_anomaly(False)
 for epoch in range(1, epochs + 1):
-    train_loss = train(epoch, model, [optimizer], scheduler)
+    train_loss = train(epoch, model, optimizer, scheduler)
+    #train_loss = train(epoch, model, [optimizer], scheduler)
     #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
     train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
