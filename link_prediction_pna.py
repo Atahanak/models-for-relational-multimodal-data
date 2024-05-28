@@ -38,7 +38,7 @@ seed = 42
 batch_size = 200
 lr = 2e-4
 eps = 1e-8
-epochs = 3
+epochs = 15
 weight_decay = 1e-3
 
 compile = False
@@ -90,16 +90,28 @@ run = wandb.init(
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-2", 
     #name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
+<<<<<<< Updated upstream
     name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
+=======
+    name=f"PNA",
+>>>>>>> Stashed changes
     config=args
 )
 
 # %%
 dataset = IBMTransactionsAML(
+<<<<<<< Updated upstream
     # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     root='/scratch/ddrashkov/dataset/HI-Small_Trans-c.csv', 
     pretrain=pretrain, 
+=======
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    pretrain=pretrain,
+    mask_type="replace", 
+>>>>>>> Stashed changes
     split_type=split_type, 
     splits=data_split, 
     khop_neighbors=khop_neighbors
@@ -268,6 +280,11 @@ def train(epoc: int, model, optimizer) -> float:
 @torch.no_grad()
 def test(loader: DataLoader, model, dataset_name) -> float:
     model.eval()
+<<<<<<< Updated upstream
+=======
+    ssloss = SSLoss(device)
+    ssmetric = SSMetric(2)
+>>>>>>> Stashed changes
     mrrs = []
     hits1 = []
     hits2 = []
@@ -358,9 +375,10 @@ scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1
 
 for epoch in range(1, epochs + 1):
     train_loss = train(epoch, model, optimizer)
-    train_metric = test(train_loader, model, "tr")
+    #train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
     test_metric = test(test_loader, model, "test")
+<<<<<<< Updated upstream
     ic(
         train_loss, 
         train_metric, 
@@ -372,6 +390,8 @@ save_dir = '.cache/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')
+=======
+>>>>>>> Stashed changes
 
 # Save the model after each epoch, replacing the old model
 torch.save(model.state_dict(), model_save_path)
