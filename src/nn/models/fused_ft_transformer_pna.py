@@ -136,7 +136,7 @@ class FTTransformerPNAFused(Module):
         for i in range(num_layers):
             if i == num_layers - 1:
                 self.backbone.append(
-                    FTTransformerPNAFusedLayer(
+                    FTTransformerPNAParallelLayer(
                         channels, 
                         nhead, 
                         feedforward_channels, 
@@ -149,7 +149,7 @@ class FTTransformerPNAFused(Module):
                 )
             else:
                 self.backbone.append(
-                    FTTransformerPNAParallelLayer(
+                    FTTransformerPNAFusedLayer(
                         channels, 
                         nhead, 
                         feedforward_channels, 
