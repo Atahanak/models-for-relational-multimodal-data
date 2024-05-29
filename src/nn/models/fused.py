@@ -107,6 +107,7 @@ class FTTransformerGINeFused(Module):
         self.pretrain = pretrain
         self.channels = channels
         self.nhidden = nhidden
+        self.edge_dim = edge_dim
         
         if stype_encoder_dict is None:
             stype_encoder_dict = {
@@ -190,7 +191,7 @@ class FTTransformerGINeFused(Module):
             layer.reset_parameters()
         self.decoder.reset_parameters()
 
-    def forward(self, tf: TensorFrame, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) -> Tensor:
+    def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -200,14 +201,16 @@ class FTTransformerGINeFused(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
-        B = tf.num_rows
-        x_gnn = self.node_emb(x)
-        #edge_attr = self.edge_emb(self.encoder(edge_attr))
-        edge_attr = self.edge_emb(edge_attr)
-
-        x_tab, _ = self.encoder(tf)
+        B = len(pos_edge_attr)
+        pos_edge_attr, _ = self.encoder(pos_edge_attr)
+        
         x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, x_tab], dim=1)
+        x_tab = torch.cat([x_cls, pos_edge_attr], dim=1)
+
+        x_gnn = self.node_emb(x)
+        edge_attr, _ = self.encoder(edge_attr)
+        edge_attr = edge_attr.view(-1, self.edge_dim)
+        edge_attr = self.edge_emb(edge_attr)
 
         for fused_layer in self.backbone:
             x_tab, x_gnn, edge_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
@@ -216,9 +219,10 @@ class FTTransformerGINeFused(Module):
             # x_gnn = x_gnn + x_g
             # edge_attr = edge_attr + e_attr
 
-        #pos_edge_attr = self.edge_emb(self.encoder(pos_edge_attr))
+        pos_edge_attr = pos_edge_attr.view(-1, self.edge_dim)
         pos_edge_attr = self.edge_emb(pos_edge_attr)
-        #neg_edge_attr = self.edge_emb(self.encoder(neg_edge_attr))
+        neg_edge_attr, _ = self.encoder(neg_edge_attr)
+        neg_edge_attr = neg_edge_attr.view(-1, self.edge_dim)
         neg_edge_attr = self.edge_emb(neg_edge_attr)
         if self.pretrain:
             out = self.decoder(x_tab[:, 0, :], x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
