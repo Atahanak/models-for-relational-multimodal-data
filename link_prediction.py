@@ -123,11 +123,8 @@ test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False
 
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
-num_columns = num_numerical + num_categorical
+num_columns = train_dataset.tensor_frame.num_cols
 ic(num_numerical, num_categorical, num_columns)
-
-ssloss = SSLoss(device, num_numerical)
-ssmetric = SSMetric(device)
 
 def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     edges = tf.y
@@ -229,7 +226,21 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
 # ic( node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 # ic( node_feats.shape, edge_index.shape, edge_attr.shape, input_edge_index.shape, input_edge_attr.shape, pos_edge_index.shape, pos_edge_attr.shape, neg_edge_index.shape, neg_edge_attr.shape)
 
-# %%
+stype_encoder_dict = {
+    stype.categorical: EmbeddingEncoder(),
+    stype.numerical: LinearEncoder(),
+    stype.timestamp: TimestampEncoder(),
+}
+encoder = StypeWiseFeatureEncoder(
+            out_channels=channels,
+            col_stats=dataset.col_stats,
+            col_names_dict=train_tensor_frame.col_names_dict,
+            stype_encoder_dict=stype_encoder_dict,
+).to(device)
+ssloss = SSLoss(device, num_numerical)
+ssmetric = SSMetric(device)
+
+
 def train(epoc: int, model, optimizer) -> float:
     model.train()
     loss_accum = total_count = 0
@@ -317,17 +328,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         del pred
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(),
-}
-encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=dataset.col_stats,
-            col_names_dict=train_tensor_frame.col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-).to(device)
+
 model = GINe(num_features=1, num_gnn_layers=3, edge_dim=train_dataset.tensor_frame.num_cols*channels, n_classes=1)
 #from src.nn.models import FTTransformerGINeFused
 #model = FTTransformerGINeFused(
@@ -356,12 +357,12 @@ scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1
 
 for epoch in range(1, epochs + 1):
     train_loss = train(epoch, model, optimizer)
-    train_metric = test(train_loader, model, "tr")
+    #train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
     test_metric = test(test_loader, model, "test")
     ic(
         train_loss, 
-        train_metric, 
+        #train_metric, 
         val_metric, 
         test_metric
     )
