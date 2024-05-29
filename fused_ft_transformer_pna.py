@@ -443,12 +443,12 @@ for epoch in range(1, epochs + 1):
     #train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
     test_metric = test(test_loader, model, "test")
-    #ic(
-    #    train_loss, 
-    #    train_metric, 
-    #    val_metric, 
-    #    test_metric
-    #)
+    # ic(
+    #     train_loss, 
+    #     train_metric, 
+    #     val_metric, 
+    #     test_metric
+    # )
 # Create a directory to save models
 save_dir = '.cache/saved_models'
 run_id = wandb.run.id
