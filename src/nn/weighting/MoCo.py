@@ -1,3 +1,7 @@
+r"""
+Classes <AbsWeighting, MoCo> are taken from https://github.com/median-research-group/LibMTL repository.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -186,13 +190,16 @@ class MoCoLoss(MoCo):
         self.init_param()
     
     def get_share_params(self):
-        return self.model.parameters()
+        if hasattr(self.model, 'get_shared_parameters'):
+            raise ValueError('The model has no shared parameters')
+        return self.model.get_shared_params()
 
     def zero_grad_share_params(self):
         r"""Set gradients of the shared parameters to zero.
         """
-        #shared_params = self.get_share_params()
-        self.model.zero_grad(set_to_none=False)
+        if hasattr(self.model, 'zero_grad_shared_parameters'):
+            raise ValueError('The model has no shared parameters')
+        self.model.zero_grad_shared_params()
     
     def loss(self, losses):
         return self.backward(

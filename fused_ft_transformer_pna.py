@@ -93,7 +93,7 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-3", 
-    name=f"fused-ft-transformer-pna",
+    name=f"last-layer-notfused,moco",
     #name=f"debug-fused",
     config=args
 )
@@ -294,13 +294,13 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             num_pred, cat_pred, pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            #loss = mocoloss.loss([link_loss, loss_c[0], loss_n[0]])
+            loss = mocoloss.loss([link_loss, t_loss])
             loss = link_loss + t_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
-            optimizer_step(optimizer, [loss])
-            #optimizer.zero_grad()
+            #optimizer_step(optimizer, [loss])
             #loss.backward()
-            #optimizer.step()
+            optimizer.step()
+            optimizer.zero_grad()
             #scheduler.step()
 
             loss_accum += (loss.item() * len(pos_pred))
@@ -311,20 +311,7 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(pos_pred)
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
-            del pos_pred
-            del neg_pred
-            del num_pred
-            del cat_pred
-            del edge_index
-            del edge_attr
-            del tf
-            del loss
-            del link_loss
-            del t_loss
-            del loss_c
-            del loss_n
             wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
-        #optimizer.state.clear()
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
@@ -413,7 +400,6 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
-# %%
 mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 ic(learnable_params)
@@ -451,8 +437,8 @@ scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer_mcm, base_lr=lr, max_lr=
 
 torch.autograd.set_detect_anomaly(False)
 for epoch in range(1, epochs + 1):
-    #train_loss = train(epoch, model, optimizer, scheduler)
-    train_loss = train(epoch, model, [optimizer], scheduler)
+    train_loss = train(epoch, model, optimizer, scheduler)
+    #train_loss = train(epoch, model, [optimizer], scheduler)
     #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
     #train_metric = test(train_loader, model, "tr")
     val_metric = test(val_loader, model, "val")
