@@ -195,7 +195,25 @@ class FTTransformerPNAFused(Module):
             layer.reset_parameters()
         self.decoder.reset_parameters()
 
-    #def get_shared_params(self):
+    def get_shared_params(self):
+        param_groups = [
+            self.encoder.parameters(),
+            [self.cls_embedding],  # Wrap single parameters in a list
+            self.node_emb.parameters(),
+            self.edge_emb.parameters(),
+            self.backbone[:-1].parameters(),
+        ]
+        
+        # Flatten the param groups into a single list
+        flat_params = [param for group in param_groups for param in group]
+        
+        return flat_params
+
+    def zero_grad_shared_params(self):
+        for param in self.get_shared_params():
+            if param.grad is not None:
+                param.grad.data.zero_()
+
 
 
     def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) -> Tensor:
