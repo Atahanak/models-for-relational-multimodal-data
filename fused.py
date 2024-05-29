@@ -37,7 +37,7 @@ batch_size = 200
 lr = 2e-4
 eps = 1e-8
 weight_decay = 1e-3
-epochs = 3
+epochs = 15
 
 compile = False
 data_split = [0.6, 0.2, 0.2]
@@ -75,7 +75,6 @@ args = {
     'weight_decay': weight_decay,
 }
 
-# %%
 np.random.seed(seed)
 random.seed(seed)
 torch.manual_seed(seed)
@@ -86,21 +85,19 @@ torch.backends.cudnn.benchmark = False
 # Set a fixed value for the hash seed
 os.environ["PYTHONHASHSEED"] = str(seed)
 
-# %%
 wandb.login()
 run = wandb.init(
     # dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm", 
-    name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=MCM+MV+LP,only-last-layer-fuse,fusenorm,correct",
+    project=f"rel-mm-2", 
+    name=f"fused",
     #name=f"debug-fused",
     config=args
 )
 
-# %%
 dataset = IBMTransactionsAML(
-    root='/scratch/imcauliffe/AML_dataset_preprocessed/HI-Small_Trans-c.csv',
-    # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/scratch/imcauliffe/AML_dataset_preprocessed/HI-Small_Trans-c.csv',
+     root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain=pretrain, 
     split_type=split_type, 
@@ -131,7 +128,6 @@ val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, 
 test_tensor_frame = test_dataset.tensor_frame
 test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
 
-# %%
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 num_columns = num_numerical + num_categorical
@@ -140,125 +136,21 @@ ic(num_numerical, num_categorical, num_columns)
 ssloss = SSLoss(device, num_numerical)
 ssmetric = SSMetric(device)
 
-# %%
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(na_strategy=NAStrategy.OLDEST_TIMESTAMP),
-}
-encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=dataset.col_stats,
-            col_names_dict=train_tensor_frame.col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
+model = FTTransformerGINeFused(
+    channels=channels,
+    out_channels=None,
+    col_stats=dataset.col_stats,
+    col_names_dict=train_tensor_frame.col_names_dict,
+    edge_dim=channels*train_dataset.tensor_frame.num_cols,
+    num_layers=num_layers, 
+    dropout=dropout,
+    pretrain=True
 )
-
-# %%
-def create_empty_rows(col_names_dict, num_rows):
-    feat_dict = {}
-    for stype, col_names in col_names_dict.items():
-        if stype == stype.categorical:
-            feat_dict[stype] = torch.full((num_rows, len(col_names)), -1)
-        elif stype == stype.numerical:
-            feat_dict[stype] = torch.full((num_rows, len(col_names)), float('NaN'))
-        elif stype == stype.timestamp:
-            #feat_dict[stype] = torch.full((num_rows, len(col_names)), -1)
-            #hack to get the timestamp encoder to work
-            row_values = [[1970, 0, 0, 3, 0, 0, 0]]
-            feat_dict[stype] = torch.tensor([row_values] * num_rows)
-    return feat_dict
-
-def inputs(tf: TensorFrame, pos_sample_prob=1, train=True):   
-    edges = tf.y
-    batch_size = len(edges)
-    # ic(edges[:, 2:])
-    # ic(edges[:, :2])
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges[:, 2:], train)
-
-    edge_data = tensor_frame.__getitem__(idx)
-    #ic(edge_data.feat_dict[stype.timestamp][0:5])
-
-    edge_attr, col_names = encoder(edge_data)
-    edge_attr = edge_attr.view(-1, len(col_names) * channels)
-
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0] + 1 # add interaction node
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
-
-    n_id_map = {value.item(): index+1 for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-    # ic(edge_index.shape, edge_attr.shape)
-
-    # sample positive edges
-    positions = torch.arange(batch_size)
-    num_samples = int(len(positions) * pos_sample_prob)
-    if len(positions) > 0 and num_samples > 0:
-        drop_idxs = torch.multinomial(torch.full((len(positions),), 1.0), num_samples, replacement=False)
-    else:
-        drop_idxs = torch.tensor([]).long()
-    drop_edge_ind = positions[drop_idxs]
-
-    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
-    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    
-    # add interaction node to the graph
-    unique_nodes_ids = torch.unique(edges[:, 2:].t()[0:2].flatten())
-    local_unique_nodes_ids = torch.tensor([n_id_map[node.item()] for node in unique_nodes_ids], dtype=torch.long)
-    # ic(unique_nodes_ids.shape)
-    int_edges = torch.stack([local_unique_nodes_ids, torch.tensor([0] * local_unique_nodes_ids.shape[0])], dim=0)
-    int_edge_attr = TensorFrame(create_empty_rows(tensor_frame.col_names_dict, local_unique_nodes_ids.shape[0]), tensor_frame.col_names_dict)
-    input_edge_index = torch.cat([int_edges, edge_index[:, ~mask]], dim=1)
-    input_edge_attr  = torch.cat([encoder(int_edge_attr)[0].view(-1, len(col_names) * channels), edge_attr[~mask]], dim=0)
-    # ic(input_edge_index.shape, input_edge_attr.shape)
-
-    pos_edge_index = edge_index[:, mask]
-    pos_edge_attr  = edge_attr[mask]
-
-    # generate/sample negative edges
-    neg_edges = []
-    neg_edge_attr = []
-    nodeset = set(range(edge_index.max()+1))
-    for i, edge in enumerate(pos_edge_index.t()):
-        src, dst = edge[0], edge[1]
-
-        # Chose negative examples in a smart way
-        unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
-        unavail_nodes = torch.unique(edge_index[:, unavail_mask])
-        unavail_nodes = set(unavail_nodes.tolist())
-        avail_nodes = nodeset - unavail_nodes
-        avail_nodes = torch.tensor(list(avail_nodes))
-        # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
-        indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
-        neg_nodes = avail_nodes[indices]
-        
-        # Generate num_neg_samples/2 negative edges with the same source but different destinations
-        num_neg_samples_half = int(num_neg_samples/2)
-        neg_dsts = neg_nodes[:num_neg_samples_half]  # Selecting num_neg_samples/2 random destination nodes for the source
-        neg_edges_src = torch.stack([src.repeat(num_neg_samples_half), neg_dsts], dim=0)
-        
-        # Generate num_neg_samples/2 negative edges with the same destination but different sources
-        neg_srcs = neg_nodes[num_neg_samples_half:]  # Selecting num_neg_samples/2 random source nodes for the destination
-        neg_edges_dst = torch.stack([neg_srcs, dst.repeat(num_neg_samples_half)], dim=0)
-
-        # Add these negative edges to the list
-        neg_edges.append(neg_edges_src)
-        neg_edges.append(neg_edges_dst)
-        # Replicate the positive edge attribute for each of the negative edges generated from this edge
-        pos_attr = pos_edge_attr[i].unsqueeze(0)  # Get the attribute of the current positive edge
-        
-        replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
-        neg_edge_attr.append(replicated_attr)
-    
-    input_edge_index = input_edge_index.to(device)
-    input_edge_attr = input_edge_attr.to(device)
-    pos_edge_index = pos_edge_index.to(device)
-    pos_edge_attr = pos_edge_attr.to(device)
-    node_feats = node_feats.to(device)
-    neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-    neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
-    return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
+model = torch.compile(model, dynamic=True) if compile else model
+model.to(device)
+learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+ic(learnable_params)
+wandb.log({"learnable_params": learnable_params})
 
 def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     
@@ -267,9 +159,9 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
     #del edges
 
-    edge_data = tensor_frame.__getitem__(idx)
-    edge_attr, col_names = encoder(edge_data)
-    edge_attr = edge_attr.view(-1, len(col_names) * channels)
+    edge_attr = tensor_frame.__getitem__(idx)
+    #edge_attr, col_names = encoder(edge_data)
+    #edge_attr = edge_attr.view(-1, num_columns * channels)
 
     nodes = torch.unique(torch.cat([khop_source, khop_destination]))
     num_nodes = nodes.shape[0]
@@ -299,7 +191,22 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
 
     # generate/sample negative edges
     neg_edges = []
-    neg_edge_attr = []
+    #ic(pos_edge_attr.feat_dict)
+    neg_dict = {}
+    for key, value in pos_edge_attr.feat_dict.items():
+        #ic(key, value.shape)
+        attr = []
+        # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
+        for r in value:
+            #ic(r.shape)
+            if key == stype.timestamp:
+                attr.append(r.repeat(num_neg_samples, 1, 1))
+            else:
+                attr.append(r.repeat(num_neg_samples, 1))
+        neg_dict[key] = torch.cat(attr, dim=0)
+    #ic(neg_dict)
+    neg_edge_attr = TensorFrame(neg_dict, pos_edge_attr.col_names_dict)
+
     nodeset = set(range(edge_index.max()+1))
     for i, edge in enumerate(pos_edge_index.t()):
         src, dst = edge[0], edge[1]
@@ -326,11 +233,12 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
         # Add these negative edges to the list
         neg_edges.append(neg_edges_src)
         neg_edges.append(neg_edges_dst)
-        # Replicate the positive edge attribute for each of the negative edges generated from this edge
-        pos_attr = pos_edge_attr[i].unsqueeze(0)  # Get the attribute of the current positive edge
         
-        replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
-        neg_edge_attr.append(replicated_attr)
+        # Replicate the positive edge attribute for each of the negative edges generated from this edge
+        # pos_attr = pos_edge_attr[i]#.unsqueeze(0)  # Get the attribute of the current positive edge
+        
+        # replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
+        # neg_edge_attr.append(replicated_attr)
     
     input_edge_index = input_edge_index.to(device)
     input_edge_attr = input_edge_attr.to(device)
@@ -338,7 +246,8 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     pos_edge_attr = pos_edge_attr.to(device)
     node_feats = node_feats.to(device)
     neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-    neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
+    #neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
+    neg_edge_attr = neg_edge_attr.to(device)
     return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
 
 
@@ -365,7 +274,7 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             #wandb.log({"lr": updated_lr})
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
             tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred, pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             loss = link_loss + t_loss
@@ -384,18 +293,6 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(pos_pred)
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
-            del pos_pred
-            del neg_pred
-            del num_pred
-            del cat_pred
-            del edge_index
-            del edge_attr
-            del tf
-            del loss
-            del link_loss
-            del t_loss
-            del loss_c
-            del loss_n
             wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
         #optimizer.state.clear()
     return {'loss': loss_accum / total_count}
@@ -418,7 +315,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         for tf in t:
             node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False)
             tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred, pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             loss = link_loss + t_loss
@@ -487,22 +384,7 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
-# %%
-model = FTTransformerGINeFused(
-    channels=channels,
-    out_channels=None,
-    col_stats=dataset.col_stats,
-    col_names_dict=train_tensor_frame.col_names_dict,
-    edge_dim=channels*train_dataset.tensor_frame.num_cols,
-    num_layers=num_layers, 
-    dropout=dropout,
-    pretrain=True
-)
-model = torch.compile(model, dynamic=True) if compile else model
-model.to(device)
-learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-ic(learnable_params)
-wandb.log({"learnable_params": learnable_params})
+
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [

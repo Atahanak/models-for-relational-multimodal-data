@@ -31,7 +31,6 @@ import sys
 
 torch.set_float32_matmul_precision('high')
 
-# %%
 seed = 42
 batch_size = 200
 lr = 2e-4
@@ -70,7 +69,6 @@ args = {
     'weight_decay': weight_decay,
 }
 
-# %%
 np.random.seed(seed)
 random.seed(seed)
 torch.manual_seed(seed)
@@ -81,14 +79,13 @@ torch.backends.cudnn.benchmark = False
 # Set a fixed value for the hash seed
 os.environ["PYTHONHASHSEED"] = str(seed)
 
-# %%
 wandb.login()
 run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-2", 
     #name=f"model=FTTransformerGINeFused,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
-    name=f"model=GINe,dataset=IBM-AML_Hi_Sm,objective=lp,channels={channels},weight_decay={weight_decay}",
+    name=f"GINe",
     config=args
 )
 
@@ -107,7 +104,6 @@ dataset.df.head(5)
 train_dataset, val_dataset, test_dataset = dataset.split()
 ic(len(train_dataset), len(val_dataset), len(test_dataset))
 
-# %%
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
@@ -133,26 +129,15 @@ ic(num_numerical, num_categorical, num_columns)
 ssloss = SSLoss(device, num_numerical)
 ssmetric = SSMetric(device)
 
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(),
-}
-encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=dataset.col_stats,
-            col_names_dict=train_tensor_frame.col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-)
-def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
-    
+def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     edges = tf.y
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
+    #del edges
 
-    edge_data = tensor_frame.__getitem__(idx)
-    edge_attr, col_names = encoder(edge_data)
-    edge_attr = edge_attr.view(-1, len(col_names) * channels)
+    edge_attr = tensor_frame.__getitem__(idx)
+    #edge_attr, col_names = encoder(edge_data)
+    #edge_attr = edge_attr.view(-1, num_columns * channels)
 
     nodes = torch.unique(torch.cat([khop_source, khop_destination]))
     num_nodes = nodes.shape[0]
@@ -182,9 +167,24 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
 
     # generate/sample negative edges
     neg_edges = []
-    neg_edge_attr = []
+    #ic(pos_edge_attr.feat_dict)
+    neg_dict = {}
+    for key, value in pos_edge_attr.feat_dict.items():
+        #ic(key, value.shape)
+        attr = []
+        # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
+        for r in value:
+            #ic(r.shape)
+            if key == stype.timestamp:
+                attr.append(r.repeat(num_neg_samples, 1, 1))
+            else:
+                attr.append(r.repeat(num_neg_samples, 1))
+        neg_dict[key] = torch.cat(attr, dim=0)
+    #ic(neg_dict)
+    neg_edge_attr = TensorFrame(neg_dict, pos_edge_attr.col_names_dict)
+
     nodeset = set(range(edge_index.max()+1))
-    for i, edge in enumerate(pos_edge_index.t()):
+    for _, edge in enumerate(pos_edge_index.t()):
         src, dst = edge[0], edge[1]
 
         # Chose negative examples in a smart way
@@ -209,11 +209,12 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
         # Add these negative edges to the list
         neg_edges.append(neg_edges_src)
         neg_edges.append(neg_edges_dst)
-        # Replicate the positive edge attribute for each of the negative edges generated from this edge
-        pos_attr = pos_edge_attr[i].unsqueeze(0)  # Get the attribute of the current positive edge
         
-        replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
-        neg_edge_attr.append(replicated_attr)
+        # Replicate the positive edge attribute for each of the negative edges generated from this edge
+        # pos_attr = pos_edge_attr[i]#.unsqueeze(0)  # Get the attribute of the current positive edge
+        
+        # replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
+        # neg_edge_attr.append(replicated_attr)
     
     input_edge_index = input_edge_index.to(device)
     input_edge_attr = input_edge_attr.to(device)
@@ -221,9 +222,9 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15, train=True):
     pos_edge_attr = pos_edge_attr.to(device)
     node_feats = node_feats.to(device)
     neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-    neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
+    #neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
+    neg_edge_attr = neg_edge_attr.to(device)
     return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
-# batch = next(iter(train_loader))
 # node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(batch)
 # ic( node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 # ic( node_feats.shape, edge_index.shape, edge_attr.shape, input_edge_index.shape, input_edge_attr.shape, pos_edge_index.shape, pos_edge_attr.shape, neg_edge_index.shape, neg_edge_attr.shape)
@@ -236,6 +237,12 @@ def train(epoc: int, model, optimizer) -> float:
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob=pos_sample_prob)
+            input_edge_attr, _ = encoder(input_edge_attr)
+            input_edge_attr = input_edge_attr.view(-1, num_columns * channels) 
+            pos_edge_attr, _ = encoder(pos_edge_attr)
+            pos_edge_attr = pos_edge_attr.view(-1, num_columns * channels)
+            neg_edge_attr, _ = encoder(neg_edge_attr)
+            neg_edge_attr = neg_edge_attr.view(-1, num_columns * channels)
             pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             #tf = tf.to(device)
             #_, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
@@ -264,6 +271,12 @@ def test(loader: DataLoader, model, dataset_name) -> float:
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, train=False, pos_sample_prob=pos_sample_prob)
+            input_edge_attr, _ = encoder(input_edge_attr)
+            input_edge_attr = input_edge_attr.view(-1, num_columns * channels) 
+            pos_edge_attr, _ = encoder(pos_edge_attr)
+            pos_edge_attr = pos_edge_attr.view(-1, num_columns * channels)
+            neg_edge_attr, _ = encoder(neg_edge_attr)
+            neg_edge_attr = neg_edge_attr.view(-1, num_columns * channels)
             pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             #tf = tf.to(device)
             #_, _, pred, neg_pred = model(tf, node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
@@ -304,8 +317,17 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         del pred
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
-# %%
-torch.autograd.set_detect_anomaly(False)
+stype_encoder_dict = {
+    stype.categorical: EmbeddingEncoder(),
+    stype.numerical: LinearEncoder(),
+    stype.timestamp: TimestampEncoder(),
+}
+encoder = StypeWiseFeatureEncoder(
+            out_channels=channels,
+            col_stats=dataset.col_stats,
+            col_names_dict=train_tensor_frame.col_names_dict,
+            stype_encoder_dict=stype_encoder_dict,
+).to(device)
 model = GINe(num_features=1, num_gnn_layers=3, edge_dim=train_dataset.tensor_frame.num_cols*channels, n_classes=1)
 #from src.nn.models import FTTransformerGINeFused
 #model = FTTransformerGINeFused(
@@ -329,18 +351,8 @@ optimizer_grouped_parameters = [
     {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-#optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
-
-# train_metric = test(train_loader, model, "tr")
-# val_metric = test(val_loader, model, "val")
-# test_metric = test(test_loader, model, "test")
-# ic(
-#         train_metric, 
-#         val_metric, 
-#         test_metric
-# )
 
 for epoch in range(1, epochs + 1):
     train_loss = train(epoch, model, optimizer)
