@@ -34,6 +34,8 @@ train:
   script:
     - conda env create -f environment.yml || conda env update -f environment.yml
     - source activate rel-mm
+    - conda develop ./src/
+    - conda develop ./pytorch-frame/
     - echo "Activated the Conda environment."
     - python self_supervised.py --testing=True  # Assuming you have a training script named this way
   only:
