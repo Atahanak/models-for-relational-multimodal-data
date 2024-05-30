@@ -167,6 +167,6 @@ wandb/
 *.out
 *.err
 
-checkpoint_dir/
+saved_models/
 scripts/
 environment_root.yml
