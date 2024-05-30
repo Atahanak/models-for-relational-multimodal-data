@@ -9,14 +9,6 @@ before_script:
   - conda env create -f environment.yaml
   - source activate rel-mm
 
-setup_conda_environment:
-  stage: setup
-  script:
-    - ls
-    - conda env create -f environment.yaml || conda env update -f environment.yaml
-    - source activate myenv
-    - echo "Conda environment is ready."
-
 pylint:
   stage: lint
   script:
