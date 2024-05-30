@@ -18,9 +18,9 @@ import wandb
 torch.set_float32_matmul_precision('high')
 
 
-def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised", checkpoint=None, testing=True, seed=42, batch_size=200, channels=128, num_layers=3,
+def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised", checkpoint=None, testing=False, seed=42, batch_size=200, channels=128, num_layers=3,
          data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"], is_compile=False,
-         lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=3, wand_dir="/mnt/data/"):
+         lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10, wand_dir="/mnt/data/"):
 
     pretrain_dict = {
         "mask": PretrainType.MASK,
@@ -172,12 +172,12 @@ def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervise
                 wandb.log({"train_loss_mcm": loss_accum / total_count,
                            "train_loss_c": loss_c_accum / t_c,
                            "train_loss_n": loss_n_accum / t_n,
-                           "epoch": epoch})
+                           "epoch": epoc})
         return ((loss_c_accum / t_c) * (num_categorical / num_columns)) + (
                     (loss_n_accum / t_n) * (num_numerical / num_columns))
 
     @torch.no_grad()
-    def test(loader: DataLoader, dataset_name) -> float:
+    def test(loader: DataLoader, dataset_name: str) -> float:
         model.eval()
         accum_acc = accum_l2 = 0
         loss_c_accum = loss_n_accum = 0
@@ -205,7 +205,8 @@ def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervise
                 loss_n = loss_n_accum / t_n
                 wandb.log({f"{dataset_name}_loss_mcm": loss_c_mcm,
                            f"{dataset_name}_loss_c": loss_c,
-                           f"{dataset_name}_loss_n": loss_n})
+                           f"{dataset_name}_loss_n": loss_n,
+                           "epoch": epoch})
 
                 acc = accum_acc/t_c
                 rmse = torch.sqrt(accum_l2/t_n)
@@ -213,6 +214,7 @@ def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervise
                 t.set_postfix(accuracy=f'{acc:.4f}',
                               rmse=f'{rmse:.4f}',
                               loss=f'{loss:.4f}',
+                              loss_c_mcm=f'{loss_c_mcm:.4f}',
                               loss_c=f'{loss_c:.4f}',
                               loss_n=f'{loss_n:.4f}')
 
@@ -220,9 +222,10 @@ def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervise
             wandb.log({f"{dataset_name}_accuracy": accum_acc / t_c,
                        f"{dataset_name}_rmse": rmse,
                        f"{dataset_name}_loss": loss,
-                       f"{dataset_name}_loss_mcm": loss_c_mcm,
+                       f"{dataset_name}_loss_c_mcm": loss_c_mcm,
                        f"{dataset_name}_loss_c": loss_c_accum / t_c,
-                       f"{dataset_name}_loss_n": loss_n_accum / t_n})
+                       f"{dataset_name}_loss_n": loss_n_accum / t_n,
+                       "epoch": epoch})
             del tf
             del pred
             return [rmse, acc]
