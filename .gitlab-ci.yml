@@ -37,6 +37,7 @@ train:
     - conda develop ./src/
     - conda develop ./pytorch-frame/
     - echo "Activated the Conda environment."
+    - git submodule update --init pytorch-frame
     - python self_supervised.py --testing=True  # Assuming you have a training script named this way
   only:
     - merge_requests  # Only run this job for merge requests
