@@ -8,7 +8,7 @@ stages:
 before_script:
   - pwd
   - ls -la
-  - conda env create -f environment.yaml
+  - conda env create -f environment.yml
   - source activate rel-mm
 
 pylint:
