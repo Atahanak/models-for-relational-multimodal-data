@@ -1,19 +1,12 @@
-image: continuumio/miniconda3  # Use an image with Conda pre-installed
-
 stages:
-  - setup
   - lint
   - train
 
-before_script:
-  - pwd
-  - ls -la
-  - conda env create -f environment.yml
-  - source activate rel-mm
-
-pylint:
+lint:
+  image: python:3.9  # Use a default Python image for linting
   stage: lint
   script:
+    - pip install pylint pylint-exit
     - echo CI_COMMIT_SHA=${CI_COMMIT_SHA}
     - echo CI_MERGE_REQUEST_TARGET_BRANCH_NAME=${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
     - git fetch origin ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
@@ -36,3 +29,14 @@ pylint:
     - merge_requests  # Only run this job for merge requests
     - main            # Also run on pushes to the main branch
 
+train:
+  image: continuumio/miniconda3  # Use Miniconda image for training
+  stage: train
+  script:
+    - conda env create -f environment.yml || conda env update -f environment.yml
+    - source activate rel-mm
+    - echo "Activated the Conda environment."
+    - python self_supervised.py  # Assuming you have a training script named this way
+  only:
+    - merge_requests  # Only run this job for merge requests
+    - main            # Also run on pushes to the main branch
