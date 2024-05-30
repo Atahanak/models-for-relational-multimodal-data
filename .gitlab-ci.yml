@@ -9,13 +9,24 @@ before_script:
 pylint:
   stage: lint
   script:
-        - echo CI_COMMIT_SHA=${CI_COMMIT_SHA}
-        - echo CI_MERGE_REQUEST_TARGET_BRANCH_NAME=${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
-        - git fetch origin ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
-        - FILES=$(git diff --name-only ${CI_COMMIT_SHA} origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} | grep '\.py'$)
-        - echo "Changed files are $FILES"
-        - mkdir ./pylint
-        - pylint --output-format=text $FILES | tee ./pylint/pylint.log || pylint-exit $?
+    - echo CI_COMMIT_SHA=${CI_COMMIT_SHA}
+    - echo CI_MERGE_REQUEST_TARGET_BRANCH_NAME=${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
+    - git fetch origin ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
+    - FILES=$(git diff --name-only ${CI_COMMIT_SHA} origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} | grep '\.py'$)
+    - echo "Changed files are $FILES"
+    - mkdir -p ./pylint
+    - |
+      if [ -z "$FILES" ]; then
+        echo "No Python files to lint.";
+      else
+        pylint --output-format=text $FILES | tee ./pylint/pylint.log
+        SCORE=$(pylint --output-format=text $FILES | tail -2 | grep -oP '\d+\.\d+' | head -1)
+        echo "Pylint score: $SCORE"
+        if (( $(echo "$SCORE < 9" | bc -l) )); then
+          echo "Warning: Some files have a pylint score less than 9!"
+        fi
+        pylint-exit ${PIPESTATUS[0]}
+      fi
   only:
     - merge_requests  # Only run this job for merge requests
-    - main
+    - main            # Also run on pushes to the main branch
