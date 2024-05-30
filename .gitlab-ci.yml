@@ -6,6 +6,8 @@ stages:
   - train
 
 before_script:
+  - pwd
+  - ls -la
   - conda env create -f environment.yaml
   - source activate rel-mm
 
