@@ -1,10 +1,9 @@
 stages:
-  - lint
-  - train
+  - lint_build
 
 lint:
   image: python:3.9  # Use a default Python image for linting
-  stage: lint
+  stage: lint_build
   script:
     - pip install pylint pylint-exit
     - echo CI_COMMIT_SHA=${CI_COMMIT_SHA}
@@ -31,7 +30,7 @@ lint:
 
 train:
   image: continuumio/miniconda3  # Use Miniconda image for training
-  stage: train
+  stage: lint_build
   script:
     - conda env create -f environment.yml || conda env update -f environment.yml
     - source activate rel-mm
