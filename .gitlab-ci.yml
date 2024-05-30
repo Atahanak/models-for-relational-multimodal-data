@@ -35,7 +35,7 @@ train:
     - conda env create -f environment.yml || conda env update -f environment.yml
     - source activate rel-mm
     - echo "Activated the Conda environment."
-    - python self_supervised.py  # Assuming you have a training script named this way
+    - python self_supervised.py --testing=True  # Assuming you have a training script named this way
   only:
     - merge_requests  # Only run this job for merge requests
     - main            # Also run on pushes to the main branch
