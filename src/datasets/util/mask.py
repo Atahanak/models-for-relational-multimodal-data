@@ -59,6 +59,8 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.target_col = 'mask'
     elif PretrainType.LINK_PRED in pretrain:
         self.target_col = 'link'
+    else:
+        self.target_col = ''
     return col_to_stype
 
 
