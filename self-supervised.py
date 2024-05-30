@@ -18,7 +18,7 @@ import wandb
 torch.set_float32_matmul_precision('high')
 
 
-def main(dataset="", run_name="self-supervised", checkpoint=None, testing=False, seed=42, batch_size=200, channels=128, num_layers=3,
+def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised", checkpoint=None, testing=True, seed=42, batch_size=200, channels=128, num_layers=3,
          data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"], is_compile=False,
          lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=3, wand_dir="/mnt/data/"):
 
@@ -50,15 +50,17 @@ def main(dataset="", run_name="self-supervised", checkpoint=None, testing=False,
 
     wandb.login()
     run = wandb.init(
+        entity="cse3000",
         dir=wand_dir,
         mode="disabled" if args['testing'] else "online",
-        project="rel-mm-2",
+        project="rel-mm",
         name=run_name,
         config=args
     )
 
+
     from src.datasets import IBMTransactionsAML
-    dataset = IBMTransactionsAML(root=dataset, pretrain=pretrain_set)
+    dataset = IBMTransactionsAML(root=os.getcwd() + dataset, pretrain=pretrain_set)
     ic(dataset)
     dataset.materialize()
     num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
@@ -159,15 +161,18 @@ def main(dataset="", run_name="self-supervised", checkpoint=None, testing=False,
                 total_count += len(tf.y)
                 t_c += loss_c[1]
                 t_n += loss_n[1]
-                t.set_postfix(loss=f'{loss_accum / total_count:.4f}', loss_c=f'{loss_c_accum / t_c:.4f}',
+                t.set_postfix(loss=f'{loss_accum / total_count:.4f}',
+                              loss_c=f'{loss_c_accum / t_c:.4f}',
                               loss_n=f'{loss_n_accum / t_n:.4f}')
                 del loss
                 del loss_c
                 del loss_n
                 del pred
                 del tf
-                wandb.log({"train_loss_mcm": loss_accum / total_count, "train_loss_c": loss_c_accum / t_c,
-                           "train_loss_n": loss_n_accum / t_n})
+                wandb.log({"train_loss_mcm": loss_accum / total_count,
+                           "train_loss_c": loss_c_accum / t_c,
+                           "train_loss_n": loss_n_accum / t_n,
+                           "epoch": epoch})
         return ((loss_c_accum / t_c) * (num_categorical / num_columns)) + (
                     (loss_n_accum / t_n) * (num_numerical / num_columns))
 
@@ -194,21 +199,33 @@ def main(dataset="", run_name="self-supervised", checkpoint=None, testing=False,
                     else:
                         accum_l2 += torch.square(ans[0] - pred[0][i][int(ans[1])])  #rmse
 
-                wandb.log({f"{dataset_name}_loss_mcm": ((loss_c_accum / t_c) * (num_categorical / num_columns)) + (
-                            (loss_n_accum / t_n) * (num_numerical / num_columns)),
-                           f"{dataset_name}_loss_c": loss_c_accum / t_c, f"{dataset_name}_loss_n": loss_n_accum / t_n})
-                t.set_postfix(accuracy=f'{accum_acc / t_c:.4f}', rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}',
-                              loss=f'{(loss_c_accum / t_c) + (loss_n_accum / t_n):.4f}',
-                              loss_c=f'{loss_c_accum / t_c:.4f}', loss_n=f'{loss_n_accum / t_n:.4f}')
-            wandb.log({f"{dataset_name}_accuracy": accum_acc / t_c, f"{dataset_name}_rmse": torch.sqrt(accum_l2 / t_n),
-                       f"{dataset_name}_loss": ((loss_c_accum / t_c) * (num_categorical / num_columns)) + (
-                                   (loss_n_accum / t_n) * (num_numerical / num_columns)),
-                       f"{dataset_name}_loss_c": loss_c_accum / t_c, f"{dataset_name}_loss_n": loss_n_accum / t_n})
+                # loss numerical
+                loss_c_mcm = ((loss_c_accum / t_c) * (num_categorical / num_columns)) + ((loss_n_accum / t_n) * (num_numerical / num_columns))
+                loss_c = loss_c_accum / t_c
+                loss_n = loss_n_accum / t_n
+                wandb.log({f"{dataset_name}_loss_mcm": loss_c_mcm,
+                           f"{dataset_name}_loss_c": loss_c,
+                           f"{dataset_name}_loss_n": loss_n})
+
+                acc = accum_acc/t_c
+                rmse = torch.sqrt(accum_l2/t_n)
+                loss = (loss_c_accum / t_c) + (loss_n_accum / t_n)
+                t.set_postfix(accuracy=f'{acc:.4f}',
+                              rmse=f'{rmse:.4f}',
+                              loss=f'{loss:.4f}',
+                              loss_c=f'{loss_c:.4f}',
+                              loss_n=f'{loss_n:.4f}')
+
+
+            wandb.log({f"{dataset_name}_accuracy": accum_acc / t_c,
+                       f"{dataset_name}_rmse": rmse,
+                       f"{dataset_name}_loss": loss,
+                       f"{dataset_name}_loss_mcm": loss_c_mcm,
+                       f"{dataset_name}_loss_c": loss_c_accum / t_c,
+                       f"{dataset_name}_loss_n": loss_n_accum / t_n})
             del tf
             del pred
-            accuracy = accum_acc / t_c
-            rmse = torch.sqrt(accum_l2 / t_n)
-            return [rmse, accuracy]
+            return [rmse, acc]
 
     # %%
     torch.autograd.set_detect_anomaly(False)
