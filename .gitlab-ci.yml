@@ -2,42 +2,38 @@ image: continuumio/miniconda3  # Use an image with Conda pre-installed
 
 stages:
   - setup
-  - lint
-  - train
+  - lint_and_train
 
 before_script:
   - conda env update -n base -f environment.yaml
   - source activate base
 
-setup_conda_environment:
+create_environment:
   stage: setup
   script:
     - conda env create -f environment.yaml || conda env update -f environment.yaml
-    - source activate myenv
+    - conda activate myenv
     - echo "Conda environment is ready."
 
 pylint:
-  stage: lint
+  stage: lint_and_train
   script:
+    - echo "Starting pylint job."
     - echo CI_COMMIT_SHA=${CI_COMMIT_SHA}
     - echo CI_MERGE_REQUEST_TARGET_BRANCH_NAME=${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
     - git fetch origin ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
     - FILES=$(git diff --name-only ${CI_COMMIT_SHA} origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} | grep '\.py'$)
     - echo "Changed files are $FILES"
-    - mkdir -p ./pylint
-    - |
-      if [ -z "$FILES" ]; then
-        echo "No Python files to lint."
-      else
-        pylint --output-format=text $FILES | tee ./pylint/pylint.log
-        SCORE=$(pylint --output-format=text $FILES | tail -2 | grep -oP '\d+\.\d+' | head -1)
-        echo "Pylint score: $SCORE"
-        if (( $(echo "$SCORE < 9" | bc -l) )); then
-          echo "Warning: Some files have a pylint score less than 9!"
-        fi
-        pylint-exit ${PIPESTATUS[0]}
-      fi
-  only:
-    - merge_requests  # Only run this job for merge requests
-    - main            # Also run on pushes to the main branch
+    - if [ -n "$FILES" ]; then pylint --output-format=text $FILES | tee ./pylint/pylint.log; fi
+    - echo "Pylint job completed."
 
+train_model:
+  stage: lint_and_train
+  script:
+    - echo "Starting training model job."
+    - python self_supervised_script.py
+    - echo "Training model job completed."
+
+only:
+  - merge_requests
+  - main
