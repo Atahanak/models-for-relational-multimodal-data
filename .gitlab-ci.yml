@@ -4,7 +4,7 @@ stages:
   - lint
 
 before_script:
-  - pip install pylint  # Ensure pylint is installed
+  - pip install pylint pylint-exit
 
 pylint:
   stage: lint

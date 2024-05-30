@@ -1,5 +1,5 @@
 """
-This module contains implementations for a self-supervised learning framework using
+This module contains implementations for a self_supervised learning framework using
 PyTorch, WandB, and other utilities to train, evaluate, and manage experiments of machine
 learning models.
 """
