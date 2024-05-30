@@ -6,8 +6,8 @@ stages:
   - train
 
 before_script:
-  - conda env update -n base -f environment.yaml
-  - source activate base
+  - conda env create -f environment.yaml
+  - source activate rel-mm
 
 setup_conda_environment:
   stage: setup
