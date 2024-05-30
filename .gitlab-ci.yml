@@ -1,10 +1,20 @@
-image: python:3.9  # Use an appropriate Python image
+image: continuumio/miniconda3  # Use an image with Conda pre-installed
 
 stages:
+  - setup
   - lint
+  - train
 
 before_script:
-  - pip install pylint pylint-exit
+  - conda env update -n base -f environment.yaml
+  - source activate base
+
+setup_conda_environment:
+  stage: setup
+  script:
+    - conda env create -f environment.yaml || conda env update -f environment.yaml
+    - source activate myenv
+    - echo "Conda environment is ready."
 
 pylint:
   stage: lint
@@ -17,7 +27,7 @@ pylint:
     - mkdir -p ./pylint
     - |
       if [ -z "$FILES" ]; then
-        echo "No Python files to lint.";
+        echo "No Python files to lint."
       else
         pylint --output-format=text $FILES | tee ./pylint/pylint.log
         SCORE=$(pylint --output-format=text $FILES | tail -2 | grep -oP '\d+\.\d+' | head -1)
@@ -30,3 +40,4 @@ pylint:
   only:
     - merge_requests  # Only run this job for merge requests
     - main            # Also run on pushes to the main branch
+
