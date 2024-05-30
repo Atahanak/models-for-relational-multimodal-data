@@ -23,9 +23,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_numerical, num_categorical, num_columns = 0, 0, 0
 
 def parse_checkpoint(checkpoint):
-    if not checkpoint:
-        raise ValueError('No checkpoint file provided')
-
     # Construct the full file path
     full_path = os.path.join(os.getcwd(), checkpoint)
     # Check if the file exists
