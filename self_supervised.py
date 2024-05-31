@@ -384,8 +384,7 @@ def calc_loss(pred: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, Tuple[
     return (accum_n / t_n) + torch.sqrt(accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
 
 
-def main(dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised",
-         checkpoint=None,
+def main(checkpoint, dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
          data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"],
          is_compile=False, testing=False, wand_dir="/mnt/data/"):
