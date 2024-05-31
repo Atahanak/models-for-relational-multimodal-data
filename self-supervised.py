@@ -33,7 +33,7 @@ compile = False
 lr = 2e-4
 eps = 1e-8
 weight_decay = 1e-3
-epochs = 3
+epochs = 30
 args = {
     "testing": False,
     "seed": seed,
@@ -54,16 +54,18 @@ args = {
 # %%
 wandb.login()
 run = wandb.init(
-    dir="/mnt/data/",
+    dir="/scratch/takyildiz/",
+    entity="cse3000",
+    group="fttransformer-mcm",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm-2", 
-    name=f"model=fttransformer,dataset=IBM-AML_Hi_Sm,objective=MCM,channels={channels},weight_decay={weight_decay}", 
+    project=f"rel-mm", 
+    name=f"fttransformer", 
     config=args
 )
 
 # %%
 from src.datasets import IBMTransactionsAML
-dataset = IBMTransactionsAML(root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', pretrain=pretrain)
+dataset = IBMTransactionsAML(root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', pretrain=pretrain)
 #dataset = IBMTransactionsAML(root='/scratch/cgriu/AML_dataset_processed/HI-Small_Trans-c.csv', pretrain=pretrain, split_type='temporal', splits=data_split)
 ic(dataset)
 dataset.materialize()
@@ -170,11 +172,6 @@ def train(epoc: int) -> float:
             t_c += loss_c[1]
             t_n += loss_n[1]
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c = f'{loss_c_accum/t_c:.4f}', loss_n = f'{loss_n_accum/t_n:.4f}')
-            del loss
-            del loss_c
-            del loss_n
-            del pred
-            del tf
             wandb.log({"train_loss_mcm": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
     return ((loss_c_accum/t_c) * (num_categorical/num_columns)) + ((loss_n_accum/t_n) * (num_numerical/num_columns))
 
@@ -222,17 +219,17 @@ torch.autograd.set_detect_anomaly(False)
 # )
 for epoch in range(1, epochs + 1):
     train_loss = train(epoch)
-    train_metric = test(train_loader, "tr")
+    #train_metric = test(train_loader, "tr")
     val_metric = test(val_loader, "val")
     test_metric = test(test_loader, "test")
     ic(
         train_loss, 
-        train_metric, 
+        #train_metric, 
         val_metric, 
         test_metric
     )
 # Create a directory to save models
-save_dir = '.cache/saved_models'
+save_dir = '/scratch/takyildiz/.cache/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')
