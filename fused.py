@@ -349,9 +349,9 @@ def test(loader: DataLoader, model, dataset_name) -> float:
                 accuracy=f'{accum_acc / t_c:.4f}',
                 rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}', 
                 loss_mcm=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}',
-                loss_c = f'{loss_c_accum/t_c:.4f}', 
-                loss_n = f'{loss_n_accum/t_n:.4f}',
-                loss_lp = f'{loss_lp_accum/total_count:.4f}',
+                loss_c=f'{loss_c_accum/t_c:.4f}',
+                loss_n=f'{loss_n_accum/t_n:.4f}',
+                loss_lp=f'{loss_lp_accum/total_count:.4f}',
             )
             del tf
             del pos_pred

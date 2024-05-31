@@ -3,6 +3,7 @@ channels:
   - pytorch
   - nvidia/label/cuda-11.8.0
   - defaults
+  - conda-forge
 dependencies:
   - _libgcc_mutex=0.1=main
   - _openmp_mutex=5.1=1_gnu
@@ -258,6 +259,7 @@ dependencies:
       - exceptiongroup==1.2.1
       - executing==2.0.1
       - fastjsonschema==2.19.1
+      - fire==0.6.0
       - fqdn==1.5.1
       - frozenlist==1.4.1
       - fsspec==2024.3.1
