@@ -25,6 +25,9 @@ fi
 # Path for the generated SLURM script
 generated_script_path="/home/$USER/cse3000/slurm/$name/$model_name/scripts/${job_name}.sh"
 
+mkdir -p /home/$USER/cse3000/slurm/$name/$model_name/scripts
+mkdir -p /home/$USER/cse3000/slurm/$name/$model_name/logs
+
 # Create the SLURM script
 cat <<EOT > $generated_script_path
 #!/bin/bash
