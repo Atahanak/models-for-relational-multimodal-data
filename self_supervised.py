@@ -409,7 +409,6 @@ def main(checkpoint="", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name=
     if checkpoint != "":
         run_id, checkpoint_epoch = parse_checkpoint(checkpoint)
     else:
-        print('lets goog')
         run_id, checkpoint_epoch = None, None
 
     init_wandb(args, run_name, wand_dir, run_id)

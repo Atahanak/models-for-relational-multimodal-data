@@ -1,9 +1,9 @@
 stages:
-  - lint_build
+  - lint
 
 lint:
   image: python:3.9  # Use a default Python image for linting
-  stage: lint_build
+  stage: lint
   script:
     - pip install pylint pylint-exit
     - echo CI_COMMIT_SHA=${CI_COMMIT_SHA}
@@ -28,17 +28,17 @@ lint:
     - merge_requests  # Only run this job for merge requests
     - main            # Also run on pushes to the main branch
 
-train:
-  image: continuumio/miniconda3  # Use Miniconda image for training
-  stage: lint_build
-  script:
-    - conda env create -f environment.yml
-    - source activate rel-mm
-    - conda develop ./src/
-    - conda develop ./pytorch-frame/
-    - echo "Activated the Conda environment."
-    - git submodule update --init pytorch-frame
-    - python self_supervised.py --testing=True  # Assuming you have a training script named this way
-  only:
-    - merge_requests  # Only run this job for merge requests
-    - main            # Also run on pushes to the main branch
+#train:
+#  image: continuumio/miniconda3  # Use Miniconda image for training
+#  stage: lint_build
+#  script:
+#    - conda env create -f environment.yml
+#    - source activate rel-mm
+#    - conda develop ./src/
+#    - conda develop ./pytorch-frame/
+#    - echo "Activated the Conda environment."
+#    - git submodule update --init pytorch-frame
+#    - python self_supervised.py --testing=True  # Assuming you have a training script named this way
+#  only:
+#    - merge_requests  # Only run this job for merge requests
+#    - main            # Also run on pushes to the main branch
