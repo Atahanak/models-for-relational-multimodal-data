@@ -282,11 +282,6 @@ def train(model: torch.nn.Module, train_loader: DataLoader, optimizer: torch.opt
             t.set_postfix(loss=f'{loss_accum / total_count:.4f}',
                           loss_c=f'{loss_c_accum / t_c:.4f}',
                           loss_n=f'{loss_n_accum / t_n:.4f}')
-            del loss
-            del loss_c
-            del loss_n
-            del pred
-            del tf
             wandb.log({"train_loss_mcm": loss_accum / total_count,
                        "train_loss_c": loss_c_accum / t_c,
                        "train_loss_n": loss_n_accum / t_n,
