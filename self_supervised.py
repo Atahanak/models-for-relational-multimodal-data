@@ -61,7 +61,7 @@ def parse_checkpoint(checkpoint: str) -> [str, int]:
         raise ValueError('Checkpoint file has invalid format')
 
 
-def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str]) -> object:
+def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str], group: Optional[str]) -> object:
     """
     Initialize the Weights & Biases run for tracking and logging.
 
@@ -75,26 +75,17 @@ def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str])
         object: An initialized wandb run object.
     """
     wandb.login()
-    if run_id is not None:
-        run = wandb.init(
-            id=run_id,
-            entity="cse3000",
-            dir=wandb_dir,
-            mode="disabled" if args['testing'] else "online",
-            project="rel-mm",
-            name=run_name,
-            config=args,
-            resume="must"
-        )
-    else:
-        run = wandb.init(
-            entity="cse3000",
-            dir=wandb_dir,
-            mode="disabled" if args['testing'] else "online",
-            project="rel-mm",
-            name=run_name,
-            config=args
-        )
+    run = wandb.init(
+        entity="cse3000",
+        dir=wandb_dir,
+        mode="disabled" if args['testing'] else "online",
+        project="rel-mm",
+        name=run_name,
+        config=args,
+        id=run_id if run_id is not None else None,    
+        resume="must" if run_id is not None else None,
+        group=group if group is not None else None,
+    )
     wandb.log({"device": str(device)})
     return run
 
@@ -133,7 +124,8 @@ def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType]) -> IBMTr
     Returns:
         IBMTransactionsAML: The prepared dataset.
     """
-    dataset = IBMTransactionsAML(root=os.getcwd() + dataset_path, pretrain=pretrain_set)
+    dataset_path = dataset_path if "scratch" in dataset_path else os.getcwd() + dataset_path
+    dataset = IBMTransactionsAML(root=dataset_path, pretrain=pretrain_set)
     ic(dataset)
     dataset.materialize()
     global num_numerical, num_categorical, num_columns
@@ -387,7 +379,7 @@ def calc_loss(pred: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, Tuple[
 def main(checkpoint="", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
          data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"],
-         is_compile=False, testing=True, wand_dir="/mnt/data/"):
+         is_compile=False, testing=True, wand_dir="/mnt/data/", group=""):
     args = {
         "testing": testing,
         "seed": seed,
@@ -411,7 +403,7 @@ def main(checkpoint="", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name=
     else:
         run_id, checkpoint_epoch = None, None
 
-    init_wandb(args, run_name, wand_dir, run_id)
+    init_wandb(args, run_name, wand_dir, run_id, group)
     pretrain_set = parse_pretrain_args(pretrain)
     dataset = prepare_dataset(dataset, pretrain_set)
     train_loader, val_loader, test_loader = setup_data_loaders(dataset, batch_size)
