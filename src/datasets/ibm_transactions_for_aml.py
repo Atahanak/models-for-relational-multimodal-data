@@ -75,9 +75,10 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Payment Format': torch_frame.categorical,
                 'Timestamp': torch_frame.timestamp,
                 'Amount Paid': torch_frame.numerical,
-                'Amount Received': torch_frame.numerical
+                #'Amount Received': torch_frame.numerical
             }
-            num_columns = ['Amount Received', 'Amount Paid']
+            #num_columns = ['Amount Received', 'Amount Paid']
+            num_columns = ['Amount Paid']
             cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
