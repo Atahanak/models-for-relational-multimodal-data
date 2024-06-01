@@ -238,7 +238,7 @@ class FTTransformerPNAFused(Module):
         edge_attr = self.edge_emb(edge_attr)
 
         for fused_layer in self.backbone:
-            x_tab, x_gnn, edge_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
+            x_tab, x_gnn, edge_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr, pos_edge_index)
             # x_t, x_g, e_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
             # x_tab = x_tab + x_t
             # x_gnn = x_gnn + x_g
@@ -345,13 +345,31 @@ class FTTransformerPNAFusedLayer(Module):
 
     #     return x_tab, x_gnn, edge_attr
 
-    def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+    #def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+    #    x_tab = self.tab_norm(self.tab_conv(x_tab))
+    #    x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+
+    #    x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
+    #    x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
+    #    x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
+
+    #    x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
+    #    x = (x + self.fuse_norm(self.fuse(x))) / 2
+
+    #    x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
+    #    x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
+    #    x_dst_gnn = x[:, self.channels+self.nhidden:]
+    #    x_gnn[edge_index[0][0:x_tab_cls.shape[0]]] = x_src_gnn
+    #    x_gnn[edge_index[1][0:x_tab_cls.shape[0]]] = x_dst_gnn
+
+    #    return x_tab, x_gnn, edge_attr
+    def forward(self, x_tab, x_gnn, edge_index, edge_attr, pos_edge_index):
         x_tab = self.tab_norm(self.tab_conv(x_tab))
         x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-        x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
-        x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
+        x_src_gnn = x_gnn[pos_edge_index[0][0:x_tab_cls.shape[0]]]
+        x_dst_gnn = x_gnn[pos_edge_index[1][0:x_tab_cls.shape[0]]]
 
         x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
         x = (x + self.fuse_norm(self.fuse(x))) / 2
@@ -405,7 +423,11 @@ class FTTransformerPNAParallelLayer(Module):
         self.gnn_conv.reset_parameters()
         self.gnn_norm.reset_parameters()
 
-    def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+    #def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+    #    x_tab = self.tab_norm(self.tab_conv(x_tab))
+    #    x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
+    #    return x_tab, x_gnn, edge_attr
+    def forward(self, x_tab, x_gnn, edge_index, edge_attr, pos_edge_index):
         x_tab = self.tab_norm(self.tab_conv(x_tab))
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
         return x_tab, x_gnn, edge_attr
