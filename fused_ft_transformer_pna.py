@@ -40,7 +40,7 @@ batch_size = 200
 lr = 2e-4
 eps = 1e-8
 weight_decay = 1e-3
-epochs = 15
+epochs = 30
 
 compile = False
 data_split = [0.6, 0.2, 0.2]
@@ -90,16 +90,18 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 
 wandb.login()
 run = wandb.init(
-    dir="/mnt/data/",
+    dir="/scratch/takyildiz/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm-3", 
-    name=f"last-layer-notfused,moco",
+    project=f"rel-mm", 
+    name=f"last-layer-notfused,moco3",
+    group=f"last-layer-notfused,moco3",
+    entity="cse3000",
     #name=f"debug-fused",
     config=args
 )
 
 dataset = IBMTransactionsAML(
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
@@ -294,7 +296,8 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             num_pred, cat_pred, pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            loss = mocoloss.loss([link_loss, t_loss])
+            #loss = mocoloss.loss([link_loss, t_loss])
+            loss = mocoloss.loss([link_loss, loss_c[0], loss_n[0]])
             loss = link_loss + t_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
             #optimizer_step(optimizer, [loss])
@@ -400,7 +403,8 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
 
-mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
+#mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
+mocoloss = MoCoLoss(model, 3, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 ic(learnable_params)
 wandb.log({"learnable_params": learnable_params})
@@ -450,7 +454,7 @@ for epoch in range(1, epochs + 1):
     #     test_metric
     # )
 # Create a directory to save models
-save_dir = '.cache/saved_models'
+save_dir = '/scratch/takyildiz/.cache/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')

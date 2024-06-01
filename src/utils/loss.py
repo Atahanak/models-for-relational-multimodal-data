@@ -25,7 +25,11 @@ class SSLoss:
             else:
                 t_n += 1
                 accum_n += torch.square(num_out[i][int(ans[1])] - ans[0])  # mse
-        return (accum_n / t_n) + torch.sqrt(accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
+        if t_c == 0:
+            return torch.sqrt(accum_n / t_n), (accum_c, t_c), (accum_n, t_n)
+        elif t_n == 0:
+            return (accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
+        return (accum_c / t_c) + torch.sqrt(accum_n / t_n), (accum_c, t_c), (accum_n, t_n)
 
     def mv_loss(self, mv_out, y):
         """
