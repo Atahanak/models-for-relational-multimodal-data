@@ -34,7 +34,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -87,7 +87,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # Apply input corruption
             if pretrain:
                 # Create mask vector
-                mask = self.create_mask(num_columns + cat_columns)
+                mask = self.create_mask(num_columns + cat_columns, masked_dir)
                 self.df["maskable_column"] = mask
                 for transformation in pretrain:
                     col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
@@ -99,10 +99,10 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
-        def create_mask(self, maskable_columns: list[str]):
+        def create_mask(self, maskable_columns: list[str], mask_dir: str):
             # Generate which columns to mask and store in file for reproducibility across different runs
-            os.makedirs("/scratch/takyildiz/.cache/masked_columns", exist_ok=True)
-            dir_masked_columns = "/scratch/takyildiz/.cache/masked_columns/IBM_AML.npy"
+            os.makedirs(mask_dir, exist_ok=True)
+            dir_masked_columns = mask_dir + "IBM_AML.npy"
             if os.path.exists(dir_masked_columns):
                 mask = np.load(dir_masked_columns)
             else:
