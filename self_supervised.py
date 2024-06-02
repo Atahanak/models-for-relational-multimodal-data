@@ -403,11 +403,16 @@ def main(checkpoint="", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name=
     else:
         run_id, checkpoint_epoch = None, None
 
+    print("setting up wandb")
     init_wandb(args, run_name, wand_dir, run_id, group)
+
     pretrain_set = parse_pretrain_args(pretrain)
+    print("preparing dataset")
     dataset = prepare_dataset(dataset, pretrain_set, masked_dir)
+    print("setting up dataloaders")
     train_loader, val_loader, test_loader = setup_data_loaders(dataset, batch_size)
 
+    print("initializing model")
     model = initialize_model(dataset, device, channels, num_layers, pretrain_set, is_compile, checkpoint)
     optimizer = setup_optimizer(model, lr, eps, weight_decay)
 
