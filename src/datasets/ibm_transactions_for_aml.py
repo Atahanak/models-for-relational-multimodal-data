@@ -99,10 +99,10 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
-        def create_mask(self, maskable_columns: list[str], mask_dir: str):
+        def create_mask(self, maskable_columns: list[str], masked_dir: str):
             # Generate which columns to mask and store in file for reproducibility across different runs
-            os.makedirs(mask_dir, exist_ok=True)
-            dir_masked_columns = mask_dir + "IBM_AML.npy"
+            os.makedirs(masked_dir, exist_ok=True)
+            dir_masked_columns = masked_dir + "IBM_AML.npy"
             if os.path.exists(dir_masked_columns):
                 mask = np.load(dir_masked_columns)
             else:
