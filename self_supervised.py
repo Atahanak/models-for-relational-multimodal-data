@@ -113,7 +113,7 @@ def parse_pretrain_args(pretrain) -> Set[PretrainType]:
     return pretrain_set
 
 
-def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType]) -> IBMTransactionsAML:
+def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], masked_dir: str) -> IBMTransactionsAML:
     """
     Prepare the dataset for training by loading it and initializing necessary configurations.
 
@@ -125,7 +125,7 @@ def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType]) -> IBMTr
         IBMTransactionsAML: The prepared dataset.
     """
     dataset_path = dataset_path if "scratch" in dataset_path else os.getcwd() + dataset_path
-    dataset = IBMTransactionsAML(root=dataset_path, pretrain=pretrain_set)
+    dataset = IBMTransactionsAML(root=dataset_path, pretrain=pretrain_set, masked_dir=masked_dir)
     ic(dataset)
     dataset.materialize()
     global num_numerical, num_categorical, num_columns
@@ -379,7 +379,7 @@ def calc_loss(pred: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, Tuple[
 def main(checkpoint="", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
          data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"],
-         is_compile=False, testing=True, wand_dir="/mnt/data/", group="", save_dir="saved_models/self-supervised"):
+         is_compile=False, testing=False, wand_dir="/mnt/data/", group="testing", masked_dir="/tmp/.cache/masked_columns", save_dir="saved_models/self-supervised"):
     args = {
         "testing": testing,
         "seed": seed,
@@ -405,7 +405,7 @@ def main(checkpoint="", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name=
 
     init_wandb(args, run_name, wand_dir, run_id, group)
     pretrain_set = parse_pretrain_args(pretrain)
-    dataset = prepare_dataset(dataset, pretrain_set)
+    dataset = prepare_dataset(dataset, pretrain_set, masked_dir)
     train_loader, val_loader, test_loader = setup_data_loaders(dataset, batch_size)
 
     model = initialize_model(dataset, device, channels, num_layers, pretrain_set, is_compile, checkpoint)
