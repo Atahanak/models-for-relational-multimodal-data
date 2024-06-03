@@ -47,7 +47,7 @@ data_split = [0.6, 0.2, 0.2]
 split_type = 'temporal'
 
 khop_neighbors = [100, 100]
-pos_sample_prob = 1
+pos_sample_prob = 0.15
 num_neg_samples = 64
 channels = 128
 num_layers = 3
@@ -58,7 +58,7 @@ pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
-    'testing': False,
+    'testing': True,
     'batch_size': batch_size,
     'seed': seed,
     'device': device,
@@ -101,8 +101,9 @@ run = wandb.init(
 )
 
 dataset = IBMTransactionsAML(
-    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
+    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     pretrain=pretrain,
@@ -191,13 +192,14 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=1, train=True):
     edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
     # sample positive edges
-    positions = torch.arange(batch_size)
-    num_samples = int(len(positions) * pos_sample_prob)
-    if len(positions) > 0 and num_samples > 0:
-        drop_idxs = torch.multinomial(torch.full((len(positions),), 1.0), num_samples, replacement=False)
-    else:
-        drop_idxs = torch.tensor([]).long()
-    drop_edge_ind = positions[drop_idxs]
+    # positions = torch.arange(batch_size)
+    # num_samples = int(len(positions) * pos_sample_prob)
+    # if len(positions) > 0 and num_samples > 0:
+    #     drop_idxs = torch.multinomial(torch.full((len(positions),), 1.0), num_samples, replacement=False)
+    # else:
+    #     drop_idxs = torch.tensor([]).long()
+    # drop_edge_ind = positions[drop_idxs]
+    drop_edge_ind = torch.tensor([x for x in range(int(batch_size/2),batch_size)])
 
     mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
     mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
