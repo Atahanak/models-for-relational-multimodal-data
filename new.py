@@ -58,7 +58,7 @@ pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
-    'testing': True,
+    'testing': False,
     'batch_size': batch_size,
     'seed': seed,
     'device': device,
@@ -102,10 +102,10 @@ run = wandb.init(
 
 dataset = IBMTransactionsAML(
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     pretrain=pretrain,
@@ -268,9 +268,10 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15):
     node_feats = node_feats.to(device)
     if len(neg_edges) > 0:
         neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-    #neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
     neg_edge_attr = neg_edge_attr.to(device)
-    return node_feats, edge_index, mask[:batch_size], input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
+    edge_index = edge_index.to(device)
+    edge_attr = edge_attr.to(device)
+    return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
 
 def optimizer_step(optimizers, losses):
     if len(optimizers) != len(losses):
@@ -291,12 +292,12 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, _, mask, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob)
+            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, 1)
             tf = tf.to(device)
             # ic(node_feats.shape, mask.shape, input_edge_index.shape, input_edge_attr.num_rows, pos_edge_index.shape, pos_edge_attr.num_rows, neg_edge_index.shape, neg_edge_attr.num_rows)
             # ic(tf.y[~mask].shape)
             # sys.exit()
-            x_tab, x_gnn = model(node_feats, input_edge_index, input_edge_attr, len(tf.y[~mask]))
+            _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
             pos_edge_attr, _ = model.encoder(pos_edge_attr)
             pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
             pos_edge_attr = model.edge_emb(pos_edge_attr)
@@ -304,27 +305,30 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
             neg_edge_attr = model.edge_emb(neg_edge_attr)
             pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+
+            x_tab, _ = model(node_feats, edge_index, edge_attr)
             num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
 
             optimizer.zero_grad()
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
-            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y[~mask])
-            #loss = mocoloss.loss([link_loss, t_loss])
-            #loss = mocoloss.loss([link_loss, loss_c[0], loss_n[0]])
-            loss = link_loss + t_loss
-            #optimizer_step(optimizer, [link_loss, t_loss])
-            #optimizer_step(optimizer, [loss])
-            loss.backward()
+            #link_loss.backward()
+            #optimizer.step()
+            #optimizer.zero_grad()
+            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+            #t_loss.backward()
+            moco_loss = mocoloss.loss([link_loss, t_loss])
             optimizer.step()
 
-            loss_accum += (loss.item() * len(pos_pred))
+            loss = link_loss.item() + t_loss.item()
+            loss_accum += (loss * len(pos_pred))
             total_count += len(pos_pred)
             t_c += loss_c[1]
             t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(pos_pred)
-            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
+            #t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
+            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}', moco_loss=f'{moco_loss[0]:.4f},{moco_loss[1]:.4f}')
             wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
     return {'loss': loss_accum / total_count}
 

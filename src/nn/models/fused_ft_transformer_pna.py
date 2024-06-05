@@ -219,7 +219,7 @@ class FTTransformerPNAFused(Module):
 
 
 
-    def forward(self, x, edge_index, edge_attr, B) -> Tensor:
+    def forward(self, x, edge_index, edge_attr) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -229,11 +229,13 @@ class FTTransformerPNAFused(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
+        B = len(edge_attr)
+
         x_gnn = self.node_emb(x)
         edge_attr, _ = self.encoder(edge_attr)
         
         x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, edge_attr[:B]], dim=1)
+        x_tab = torch.cat([x_cls, edge_attr], dim=1)
 
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
