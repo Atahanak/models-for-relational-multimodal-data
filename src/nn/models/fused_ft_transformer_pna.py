@@ -83,11 +83,11 @@ class FTTransformerPNAFused(Module):
         col_stats: dict[str, dict[StatType, Any]],
         col_names_dict: dict[torch_frame.stype, list[str]],
         stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
+        encoder: StypeWiseFeatureEncoder = None,
         
         # training parameters
         pretrain: set[PretrainType] = False,
 
-        
         # PNA parameters
         deg=None,
         node_dim: int = 1,
@@ -111,19 +111,22 @@ class FTTransformerPNAFused(Module):
         self.nhidden = nhidden
         self.edge_dim = edge_dim
         
-        if stype_encoder_dict is None:
-            stype_encoder_dict = {
-                stype.categorical: EmbeddingEncoder(),
-                stype.numerical: LinearEncoder(),
-                stype.timestamp: TimestampEncoder()
-            }
+        if encoder is None:
+            if stype_encoder_dict is None:
+                stype_encoder_dict = {
+                    stype.categorical: EmbeddingEncoder(),
+                    stype.numerical: LinearEncoder(),
+                    stype.timestamp: TimestampEncoder()
+                }
 
-        self.encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=col_stats,
-            col_names_dict=col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-        )
+            self.encoder = StypeWiseFeatureEncoder(
+                out_channels=channels,
+                col_stats=col_stats,
+                col_names_dict=col_names_dict,
+                stype_encoder_dict=stype_encoder_dict,
+            )
+        else:
+            self.encoder = encoder
 
         # fttransformer
         self.cls_embedding = Parameter(torch.empty(channels))
@@ -162,28 +165,28 @@ class FTTransformerPNAFused(Module):
                     )
                 )
 
-        if pretrain:
-            # Only currently accomdates combinations of {MCM + LP} and {MCM + LP + MV}
-            num_numerical = len(col_names_dict[stype.numerical]) if stype.numerical in col_names_dict else 0 
-            num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]] if stype.categorical in col_names_dict else 0
-            if pretrain == {PretrainType.MASK, PretrainType.MASK_VECTOR, PretrainType.LINK_PRED}:
-                self.decoder = SelfSupervised_MCM_MV_LP_Head(
-                    channels=channels, 
-                    num_numerical=num_numerical, 
-                    num_categorical=num_categorical, 
-                    nhidden=nhidden, 
-                    dropout=final_dropout
-                )
-            else:
-                self.decoder = SelfSupervisedLPHead(
-                    channels=channels, 
-                    num_numerical=num_numerical, 
-                    num_categorical=num_categorical, 
-                    nhidden=nhidden, 
-                    dropout=final_dropout
-            )
-        else:
-            self.decoder = SupervisedHead(channels, out_channels)
+        # if pretrain:
+        #     # Only currently accomdates combinations of {MCM + LP} and {MCM + LP + MV}
+        #     num_numerical = len(col_names_dict[stype.numerical]) if stype.numerical in col_names_dict else 0 
+        #     num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]] if stype.categorical in col_names_dict else 0
+        #     if pretrain == {PretrainType.MASK, PretrainType.MASK_VECTOR, PretrainType.LINK_PRED}:
+        #         self.decoder = SelfSupervised_MCM_MV_LP_Head(
+        #             channels=channels, 
+        #             num_numerical=num_numerical, 
+        #             num_categorical=num_categorical, 
+        #             nhidden=nhidden, 
+        #             dropout=final_dropout
+        #         )
+        #     else:
+        #         self.decoder = SelfSupervisedLPHead(
+        #             channels=channels, 
+        #             num_numerical=num_numerical, 
+        #             num_categorical=num_categorical, 
+        #             nhidden=nhidden, 
+        #             dropout=final_dropout
+        #     )
+        # else:
+        #     self.decoder = SupervisedHead(channels, out_channels)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -193,7 +196,7 @@ class FTTransformerPNAFused(Module):
         self.encoder.reset_parameters()
         for layer in self.backbone:
             layer.reset_parameters()
-        self.decoder.reset_parameters()
+        #self.decoder.reset_parameters()
 
     def get_shared_params(self):
         param_groups = [
@@ -216,7 +219,7 @@ class FTTransformerPNAFused(Module):
 
 
 
-    def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) -> Tensor:
+    def forward(self, x, edge_index, edge_attr, B) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -226,15 +229,12 @@ class FTTransformerPNAFused(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
-        B = len(pos_edge_attr)
-        pos_edge_attr, _ = self.encoder(pos_edge_attr)
-        
-        x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, pos_edge_attr], dim=1)
-        #x_tab = torch.cat([x_cls, edge_attr[:pos_edge_attr.shape[0]]], dim=1)
-
         x_gnn = self.node_emb(x)
         edge_attr, _ = self.encoder(edge_attr)
+        
+        x_cls = self.cls_embedding.repeat(B, 1, 1)
+        x_tab = torch.cat([x_cls, edge_attr[:B]], dim=1)
+
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
@@ -246,24 +246,26 @@ class FTTransformerPNAFused(Module):
             # x_gnn = x_gnn + x_g
             # edge_attr = edge_attr + e_attr
 
-        pos_edge_attr = pos_edge_attr.view(-1, self.edge_dim)
-        pos_edge_attr = self.edge_emb(pos_edge_attr)
-        neg_edge_attr, _ = self.encoder(neg_edge_attr)
-        neg_edge_attr = neg_edge_attr.view(-1, self.edge_dim)
-        neg_edge_attr = self.edge_emb(neg_edge_attr)
-        if self.pretrain:
-            out = self.decoder(x_tab[:, 0, :], x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-        else:
-            out = self.decoder(x)
-        return out
+        # pos_edge_attr, _ = self.encoder(pos_edge_attr)
+        # pos_edge_attr = pos_edge_attr.view(-1, self.edge_dim)
+        # pos_edge_attr = self.edge_emb(pos_edge_attr)
+        # neg_edge_attr, _ = self.encoder(neg_edge_attr)
+        # neg_edge_attr = neg_edge_attr.view(-1, self.edge_dim)
+        # neg_edge_attr = self.edge_emb(neg_edge_attr)
+        # if self.pretrain:
+        #     out = self.decoder(x_tab[:, 0, :], x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+        # else:
+        #     out = self.decoder(x)
+        # return out
+        return x_tab, x_gnn
 
 class FTTransformerPNAFusedLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
         super().__init__()
         self.channels = channels
         self.nhidden = nhidden
-        fused_dim = channels + nhidden
-        #fused_dim = channels + 2*nhidden
+        #fused_dim = channels + nhidden
+        fused_dim = channels + 2*nhidden
 
         # fttransformer
         self.tab_conv = TransformerEncoderLayer(
@@ -321,49 +323,25 @@ class FTTransformerPNAFusedLayer(Module):
         for p in self.fuse.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
-    # pooling idea
+
     def forward(self, x_tab, x_gnn, edge_index, edge_attr):
-       x_tab = self.tab_norm(self.tab_conv(x_tab))
-       x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+        x_tab = self.tab_norm(self.tab_conv(x_tab))
+        x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
 
-       x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-       x_int_gnn = x_gnn[edge_index.flatten()].mean(axis=0)
-       #ic(x_int_gnn.shape)
-       x_int_gnn = x_int_gnn.repeat(x_tab_cls.shape[0], 1)
-       #x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
-       #x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
+        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
+        x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
+        x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
 
-       #x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
-       #ic(x_tab_cls.shape, x_int_gnn.shape)
-       x = torch.cat([x_tab_cls, x_int_gnn], dim=-1)
-       x = (x + self.fuse_norm(self.fuse(x))) / 2
+        x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
+        x = (x + self.fuse_norm(self.fuse(x))) / 2
 
-       x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
-       x_gnn[edge_index.flatten()] = x_gnn[edge_index.flatten()] + x[:, self.channels:].mean() 
-       #x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
-       #x_dst_gnn = x[:, self.channels+self.nhidden:]
-       #x_gnn[edge_index[0][0:x_tab_cls.shape[0]]] = x_src_gnn
-       #x_gnn[edge_index[1][0:x_tab_cls.shape[0]]] = x_dst_gnn
+        x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
+        x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
+        x_dst_gnn = x[:, self.channels+self.nhidden:]
+        x_gnn[edge_index[0][0:x_tab_cls.shape[0]]] = x_src_gnn
+        x_gnn[edge_index[1][0:x_tab_cls.shape[0]]] = x_dst_gnn
 
-       return x_tab, x_gnn, edge_attr
-    # def forward(self, x_tab, x_gnn, edge_index, edge_attr): #, pos_edge_index):
-    #     x_tab = self.tab_norm(self.tab_conv(x_tab))
-    #     x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
-
-    #     x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-    #     x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
-    #     x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
-
-    #     x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
-    #     x = (x + self.fuse_norm(self.fuse(x))) / 2
-
-    #     x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
-    #     x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
-    #     x_dst_gnn = x[:, self.channels+self.nhidden:]
-    #     x_gnn[edge_index[0][0:x_tab_cls.shape[0]]] = x_src_gnn
-    #     x_gnn[edge_index[1][0:x_tab_cls.shape[0]]] = x_dst_gnn
-
-    #     return x_tab, x_gnn, edge_attr
+        return x_tab, x_gnn, edge_attr
     
 class FTTransformerPNAParallelLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
@@ -410,7 +388,3 @@ class FTTransformerPNAParallelLayer(Module):
        x_tab = self.tab_norm(self.tab_conv(x_tab))
        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
        return x_tab, x_gnn, edge_attr
-    # def forward(self, x_tab, x_gnn, edge_index, edge_attr, pos_edge_index):
-    #     x_tab = self.tab_norm(self.tab_conv(x_tab))
-    #     x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-    #     return x_tab, x_gnn, edge_attr

@@ -58,7 +58,7 @@ pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
-    'testing': False,
+    'testing': True,
     'batch_size': batch_size,
     'seed': seed,
     'device': device,
@@ -102,10 +102,10 @@ run = wandb.init(
 
 dataset = IBMTransactionsAML(
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     pretrain=pretrain,
@@ -173,16 +173,13 @@ model = FTTransformerPNAFused(
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
 
-def lp_inputs(tf: TensorFrame, pos_sample_prob=0.5, train=True):
+def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15):
     
     edges = tf.y[:, 2:]
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
-    #del edges
 
     edge_attr = tensor_frame.__getitem__(idx)
-    #edge_attr, col_names = encoder(edge_data)
-    #edge_attr = edge_attr.view(-1, num_columns * channels)
 
     nodes = torch.unique(torch.cat([khop_source, khop_destination]))
     num_nodes = nodes.shape[0]
@@ -193,6 +190,8 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.5, train=True):
     local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
     edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
+    if pos_sample_prob == 0:
+        return node_feats.to(device), edge_index.to(device), edge_attr.to(device) 
     # sample positive edges
     positions = torch.arange(batch_size)
     num_samples = int(len(positions) * pos_sample_prob)
@@ -267,11 +266,11 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.5, train=True):
     pos_edge_index = pos_edge_index.to(device)
     pos_edge_attr = pos_edge_attr.to(device)
     node_feats = node_feats.to(device)
-    neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
+    if len(neg_edges) > 0:
+        neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
     #neg_edge_attr = torch.cat(neg_edge_attr, dim=0).to(device)
     neg_edge_attr = neg_edge_attr.to(device)
     return node_feats, edge_index, mask[:batch_size], input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
-
 
 def optimizer_step(optimizers, losses):
     if len(optimizers) != len(losses):
@@ -292,24 +291,31 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            # Get the updated learning rate and log it
-            #updated_lr = optimizer.param_groups[0]['lr']
-            #wandb.log({"lr": updated_lr})
-            node_feats, edge_index, mask, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
-            #tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr, len(tf.y))
+            node_feats, _, mask, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob)
+            tf = tf.to(device)
+            # ic(node_feats.shape, mask.shape, input_edge_index.shape, input_edge_attr.num_rows, pos_edge_index.shape, pos_edge_attr.num_rows, neg_edge_index.shape, neg_edge_attr.num_rows)
+            # ic(tf.y[~mask].shape)
+            # sys.exit()
+            x_tab, x_gnn = model(node_feats, input_edge_index, input_edge_attr, len(tf.y[~mask]))
+            pos_edge_attr, _ = model.encoder(pos_edge_attr)
+            pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
+            pos_edge_attr = model.edge_emb(pos_edge_attr)
+            neg_edge_attr, _ = model.encoder(neg_edge_attr)
+            neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
+            neg_edge_attr = model.edge_emb(neg_edge_attr)
+            pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
+
+            optimizer.zero_grad()
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y[~mask])
-            #sys.exit()
-            loss = mocoloss.loss([link_loss, t_loss])
+            #loss = mocoloss.loss([link_loss, t_loss])
             #loss = mocoloss.loss([link_loss, loss_c[0], loss_n[0]])
             loss = link_loss + t_loss
             #optimizer_step(optimizer, [link_loss, t_loss])
             #optimizer_step(optimizer, [loss])
-            #loss.backward()
+            loss.backward()
             optimizer.step()
-            optimizer.zero_grad()
-            #scheduler.step()
 
             loss_accum += (loss.item() * len(pos_pred))
             total_count += len(pos_pred)
@@ -318,12 +324,56 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(pos_pred)
-            t.set_postfix(loss=f'{loss_accum/total_count:.4f}')
+            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
             wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
-def test(loader: DataLoader, model, dataset_name) -> float:
+def eval_mcm(loader: DataLoader, model, mcm_decoder, dataset_name) -> float:
+    model.eval()
+    total_count = 0
+    accum_acc = accum_l2 = 0
+    loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
+    t_n = t_c = 0
+    with tqdm(loader, desc=f'Evaluating') as t:
+        for tf in t:
+            node_feats, edge_index, edge_attr = lp_inputs(tf, pos_sample_prob=0)
+            tf.y = tf.y.to(device)
+            x_tab, _ = model(node_feats, edge_index, edge_attr, len(tf.y))
+            num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
+            _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+            t_c += loss_c[1]
+            t_n += loss_n[1] 
+            loss_c_accum += loss_c[0]
+            loss_n_accum += loss_n[0]
+            total_count += len(num_pred)
+            for i, ans in enumerate(tf.y):
+                if ans[1] > (num_numerical-1):
+                    accum_acc += (cat_pred[int(ans[1])-num_numerical][i].argmax() == int(ans[0]))
+                else:
+                    accum_l2 += torch.square(ans[0] - num_pred[i][int(ans[1])]) #rmse
+            t.set_postfix(
+                accuracy=f'{accum_acc / t_c:.4f}',
+                rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}', 
+                loss_mcm=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}',
+                loss_c = f'{loss_c_accum/t_c:.4f}', 
+                loss_n = f'{loss_n_accum/t_n:.4f}',
+            )
+            wandb.log({
+                f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
+                f"{dataset_name}_loss_c": loss_c_accum/t_c,
+                f"{dataset_name}_loss_n": loss_n_accum/t_n,
+            })
+        accuracy = accum_acc / t_c
+        rmse = torch.sqrt(accum_l2 / t_n)
+        wandb.log({
+            f"{dataset_name}_accuracy": accuracy,
+            f"{dataset_name}_rmse": rmse,
+        })
+        return {"accuracy": accuracy, "rmse": rmse}
+
+@torch.no_grad()
+def eval_lp(loader: DataLoader, model, lp_decoder, dataset_name) -> float:
     model.eval()
     mrrs = []
     hits1 = []
@@ -332,26 +382,21 @@ def test(loader: DataLoader, model, dataset_name) -> float:
     hits10 = []
     loss_accum = 0
     total_count = 0
-    accum_acc = accum_l2 = 0
-    loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
-    t_n = t_c = 0
+    loss_accum = loss_lp_accum = total_count = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, mask, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf)
-            #tf = tf.to(device)
-            num_pred, cat_pred, pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr, len(tf.y))
-            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
-            # ic(mask.shape, tf.y.shape, tf.y[~mask].shape)
-            # ic(len(num_pred), len(cat_pred), cat_pred[0].shape, num_pred[0].shape)
-
-            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y[~mask])
-            loss = link_loss + t_loss
+            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob=1)
+            _, x_gnn = model(node_feats, input_edge_index, input_edge_attr, 0)
+            pos_edge_attr, _ = model.encoder(pos_edge_attr)
+            pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
+            pos_edge_attr = model.edge_emb(pos_edge_attr)
+            neg_edge_attr, _ = model.encoder(neg_edge_attr)
+            neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
+            neg_edge_attr = model.edge_emb(neg_edge_attr)
+            pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            loss = ssloss.lp_loss(pos_pred, neg_pred)
             
-            t_c += loss_c[1]
-            t_n += loss_n[1] 
-            loss_c_accum += loss_c[0]
-            loss_n_accum += loss_n[0]
-            loss_lp_accum += link_loss * len(pos_pred)
+            loss_lp_accum += loss * len(pos_pred)
             loss_accum += float(loss) * len(pos_pred)
             total_count += len(pos_pred)
             mrr_score, hits = ssmetric.mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
@@ -360,30 +405,15 @@ def test(loader: DataLoader, model, dataset_name) -> float:
             hits2.append(hits['hits@2'])
             hits5.append(hits['hits@5'])
             hits10.append(hits['hits@10'])
-            for i, ans in enumerate(tf.y[~mask]):
-                # ans --> [val, idx]
-                if ans[1] > (num_numerical-1):
-                    accum_acc += (cat_pred[int(ans[1])-num_numerical][i].argmax() == int(ans[0]))
-                else:
-                    accum_l2 += torch.square(ans[0] - num_pred[i][int(ans[1])]) #rmse
             t.set_postfix(
-                loss=f'{loss_accum/total_count:.4f}',
                 mrr=f'{np.mean(mrrs):.4f}',
                 hits1=f'{np.mean(hits1):.4f}',
                 hits2=f'{np.mean(hits2):.4f}',
                 hits5=f'{np.mean(hits5):.4f}',
                 hits10=f'{np.mean(hits10):.4f}',
-                accuracy=f'{accum_acc / t_c:.4f}',
-                rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}', 
-                loss_mcm=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}',
-                loss_c = f'{loss_c_accum/t_c:.4f}', 
-                loss_n = f'{loss_n_accum/t_n:.4f}',
                 loss_lp = f'{loss_lp_accum/total_count:.4f}',
             )
             wandb.log({
-                f"{dataset_name}_loss": loss_accum/total_count,
-                f"{dataset_name}_loss_c": loss_c_accum/t_c,
-                f"{dataset_name}_loss_n": loss_n_accum/t_n,
                 f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
             })
         mrr_score = np.mean(mrrs)
@@ -391,18 +421,14 @@ def test(loader: DataLoader, model, dataset_name) -> float:
         hits2 = np.mean(hits2)
         hits5 = np.mean(hits5)
         hits10 = np.mean(hits10)
-        accuracy = accum_acc / t_c
-        rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
             f"{dataset_name}_mrr": mrr_score,
             f"{dataset_name}_hits@1": hits1,
             f"{dataset_name}_hits@2": hits2,
             f"{dataset_name}_hits@5": hits5,
             f"{dataset_name}_hits@10": hits10,
-            f"{dataset_name}_accuracy": accuracy,
-            f"{dataset_name}_rmse": rmse,
         })
-        return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10, "accuracy": accuracy, "rmse": rmse}
+        return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
 mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 #mocoloss = MoCoLoss(model, 3, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
@@ -431,13 +457,28 @@ optimizer_mcm = torch.optim.AdamW(params_mcm, lr=lr, eps=eps, weight_decay=weigh
 optimizer_lp = torch.optim.AdamW(params_lp, lr=lr, eps=eps, weight_decay=weight_decay)
 scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer_mcm, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
 
-#train_metric = test(train_loader, model, "tr")
-# val_metric = test(val_loader, model, "val")
-# test_metric = test(test_loader, model, "test")
+from src.nn.decoder import MCMHead
+from src.nn.gnn.decoder import LinkPredHead
+from torch_frame.data.stats import StatType
+num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
+mcm_decoder = MCMHead(channels, num_numerical, num_categorical).to(device)
+lp_decoder = LinkPredHead(n_hidden=channels, dropout=dropout).to(device)
+
+# train_mcm = eval_mcm(train_loader, model, mcm_decoder, "tr")
+# train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
+
+# val_mcm = eval_mcm(val_loader, model, mcm_decoder, "val")
+# val_lp = eval_lp(val_loader, model, lp_decoder, "val")
+
+# test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
+# test_lp = eval_lp(test_loader, model, lp_decoder, "test")
 # ic(
-#         train_metric,
-#         val_metric, 
-#         test_metric
+#     train_mcm,
+#     train_lp,
+#     val_mcm,
+#     val_lp,
+#     test_mcm,
+#     test_lp
 # )
 
 torch.autograd.set_detect_anomaly(False)
@@ -446,14 +487,17 @@ for epoch in range(1, epochs + 1):
     #train_loss = train(epoch, model, [optimizer], scheduler)
     #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
     #train_metric = test(train_loader, model, "tr")
-    val_metric = test(val_loader, model, "val")
-    test_metric = test(test_loader, model, "test")
-    # ic(
-    #     train_loss, 
-    #     train_metric, 
-    #     val_metric, 
-    #     test_metric
-    # )
+    val_mcm = eval_mcm(val_loader, model, mcm_decoder, "val")
+    val_lp = eval_lp(val_loader, model, lp_decoder, "val")
+    test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
+    test_lp = eval_lp(test_loader, model, lp_decoder, "test")
+    ic(
+        train_loss,
+        val_mcm,
+        val_lp,
+        test_mcm,
+        test_lp
+    )
 # Create a directory to save models
 #save_dir = '/scratch/takyildiz/.cache/saved_models'
 #run_id = wandb.run.id

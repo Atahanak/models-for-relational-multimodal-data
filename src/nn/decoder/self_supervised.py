@@ -130,3 +130,73 @@ class SelfSupervisedLPHead(Module):
         num_out, cat_out = self.mcm_decoder(x_tab)
         pos_pred, neg_pred = self.lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
         return num_out, cat_out, pos_pred, neg_pred
+
+class MCMHead(Module):
+    r"""Used for pretraining the FT-Transformer model."""
+    def __init__(self, channels: int, num_numerical: int, num_categorical: list[int]) -> None:
+        super().__init__()
+        self.num_decoder = Sequential(
+            LayerNorm(channels),
+            ReLU(),
+            Linear(channels, num_numerical),
+        )
+        self.cat_decoder = ModuleList([Sequential(
+            LayerNorm(channels),
+            ReLU(),
+            Linear(channels, num_classes),
+        ) for num_classes in num_categorical])
+        self.reset_parameters()
+    
+    def reset_parameters(self) -> None:
+        for m in self.num_decoder:
+            if not isinstance(m, ReLU):
+                m.reset_parameters()
+        for m in self.cat_decoder:
+            for n in m:
+                if not isinstance(n, ReLU):
+                    n.reset_parameters()
+
+    def forward(self, x_cls: Tensor) -> tuple[Tensor, list[Tensor]]:
+        r"""Forward pass.
+
+        Args:
+            x_cls (torch.Tensor): Output of the transformer.
+
+        Returns:
+            tuple[torch.Tensor, list[torch.Tensor]]: Numerical and categorical
+            outputs.
+        """
+        num_out = self.num_decoder(x_cls)
+        cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
+        return (num_out, cat_out)
+
+
+class MVHead(Module):
+    r"""Used for pretraining the FT-Transformer model with mask vector prediction"""
+
+    def __init__(self, channels: int, num_numerical: int, num_categorical: list[int]) -> None:
+        super().__init__()
+        self.mask_vector_decoder = Sequential(
+            LayerNorm(channels),
+            ReLU(),
+            Linear(channels, num_numerical + len(num_categorical))
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        for m in self.mask_vector_decoder:
+            if not isinstance(m, ReLU):
+                m.reset_parameters()
+
+    def forward(self, x_cls: Tensor) -> tuple[Tensor, list[Tensor], Tensor]:
+        r"""Forward pass.
+
+        Args:
+            x_cls (torch.Tensor): Output of the transformer.
+
+        Returns:
+            tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]: Numerical and categorical
+            outputs, and the prediction of the mask vector.
+        """
+        mv_out = self.mask_vector_decoder(x_cls)
+        return mv_out

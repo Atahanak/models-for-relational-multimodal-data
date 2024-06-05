@@ -10,17 +10,17 @@ class LinkPredHead(torch.nn.Module):
     config : GNNConfig
         Architecture configuration
     """
-    def __init__(self, n_classes=1, n_hidden=100, final_dropout=0.5) -> None:
+    def __init__(self, n_classes=1, n_hidden=128, dropout=0.5) -> None:
         super().__init__()
         self.n_hidden = n_hidden
         self.n_classes = n_classes
-        self.final_dropout = final_dropout
+        self.dropout = dropout
 
         self.mlp = nn.Sequential(
             Linear(self.n_hidden*3, self.n_hidden), 
-            nn.ReLU(), nn.Dropout(self.final_dropout), 
+            nn.ReLU(), nn.Dropout(self.dropout), 
             Linear(self.n_hidden, 25), nn.ReLU(), 
-            nn.Dropout(self.final_dropout),
+            nn.Dropout(self.dropout),
             Linear(25, self.n_classes)
         )
         self.reset_parameters()
