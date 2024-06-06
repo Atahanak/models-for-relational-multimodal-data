@@ -292,44 +292,48 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
 
     with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, 1)
+            node_feats, edge_index, edge_attr = lp_inputs(tf, 0)
+            #node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, 1)
             tf = tf.to(device)
-            # ic(node_feats.shape, mask.shape, input_edge_index.shape, input_edge_attr.num_rows, pos_edge_index.shape, pos_edge_attr.num_rows, neg_edge_index.shape, neg_edge_attr.num_rows)
-            # ic(tf.y[~mask].shape)
-            # sys.exit()
-            _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
-            pos_edge_attr, _ = model.encoder(pos_edge_attr)
-            pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
-            pos_edge_attr = model.edge_emb(pos_edge_attr)
-            neg_edge_attr, _ = model.encoder(neg_edge_attr)
-            neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
-            neg_edge_attr = model.edge_emb(neg_edge_attr)
-            pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            # _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
+            # pos_edge_attr, _ = model.encoder(pos_edge_attr)
+            # pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
+            # pos_edge_attr = model.edge_emb(pos_edge_attr)
+            # neg_edge_attr, _ = model.encoder(neg_edge_attr)
+            # neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
+            # neg_edge_attr = model.edge_emb(neg_edge_attr)
+            # pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 
             x_tab, _ = model(node_feats, edge_index, edge_attr)
             num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
 
             optimizer.zero_grad()
-            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            #link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             #link_loss.backward()
-            #optimizer.step()
             #optimizer.zero_grad()
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            #t_loss.backward()
-            moco_loss = mocoloss.loss([link_loss, t_loss])
+            t_loss.backward()
+            #moco_loss = mocoloss.loss([link_loss, t_loss])
             optimizer.step()
 
-            loss = link_loss.item() + t_loss.item()
-            loss_accum += (loss * len(pos_pred))
-            total_count += len(pos_pred)
-            t_c += loss_c[1]
-            t_n += loss_n[1]
+            #loss = link_loss.item()# + t_loss.item()
+            loss = t_loss.item()
+            #loss = link_loss.item() + t_loss.item()
+
+            loss_accum += (loss * len(tf.y))
+            total_count += len(tf.y)
+            #t_c += loss_c[1]
+            #t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
-            loss_lp_accum += link_loss.item() * len(pos_pred)
+            #loss_lp_accum += link_loss.item() * len(tf.y)
+            #t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}')
+            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
             #t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
-            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}', moco_loss=f'{moco_loss[0]:.4f},{moco_loss[1]:.4f}')
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            #t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}', moco_loss=f'{moco_loss[0]:.4f},{moco_loss[1]:.4f}')
+            #wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            #wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count})
     return {'loss': loss_accum / total_count}
 
 @torch.no_grad()
@@ -343,7 +347,7 @@ def eval_mcm(loader: DataLoader, model, mcm_decoder, dataset_name) -> float:
         for tf in t:
             node_feats, edge_index, edge_attr = lp_inputs(tf, pos_sample_prob=0)
             tf.y = tf.y.to(device)
-            x_tab, _ = model(node_feats, edge_index, edge_attr, len(tf.y))
+            x_tab, _ = model(node_feats, edge_index, edge_attr)
             num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
             _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             t_c += loss_c[1]
@@ -390,7 +394,7 @@ def eval_lp(loader: DataLoader, model, lp_decoder, dataset_name) -> float:
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob=1)
-            _, x_gnn = model(node_feats, input_edge_index, input_edge_attr, 0)
+            _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
             pos_edge_attr, _ = model.encoder(pos_edge_attr)
             pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
             pos_edge_attr = model.edge_emb(pos_edge_attr)
@@ -474,8 +478,8 @@ lp_decoder = LinkPredHead(n_hidden=channels, dropout=dropout).to(device)
 # val_mcm = eval_mcm(val_loader, model, mcm_decoder, "val")
 # val_lp = eval_lp(val_loader, model, lp_decoder, "val")
 
-# test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
-# test_lp = eval_lp(test_loader, model, lp_decoder, "test")
+#test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
+#test_lp = eval_lp(test_loader, model, lp_decoder, "test")
 # ic(
 #     train_mcm,
 #     train_lp,
@@ -492,16 +496,10 @@ for epoch in range(1, epochs + 1):
     #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
     #train_metric = test(train_loader, model, "tr")
     val_mcm = eval_mcm(val_loader, model, mcm_decoder, "val")
-    val_lp = eval_lp(val_loader, model, lp_decoder, "val")
+    #val_lp = eval_lp(val_loader, model, lp_decoder, "val")
     test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
-    test_lp = eval_lp(test_loader, model, lp_decoder, "test")
-    ic(
-        train_loss,
-        val_mcm,
-        val_lp,
-        test_mcm,
-        test_lp
-    )
+    #test_lp = eval_lp(test_loader, model, lp_decoder, "test")
+
 # Create a directory to save models
 #save_dir = '/scratch/takyildiz/.cache/saved_models'
 #run_id = wandb.run.id

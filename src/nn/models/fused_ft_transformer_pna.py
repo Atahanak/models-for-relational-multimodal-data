@@ -331,8 +331,8 @@ class FTTransformerPNAFusedLayer(Module):
         x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-        x_src_gnn = x_gnn[edge_index[0][0:x_tab_cls.shape[0]]]
-        x_dst_gnn = x_gnn[edge_index[1][0:x_tab_cls.shape[0]]]
+        x_src_gnn = x_gnn[edge_index[0]]
+        x_dst_gnn = x_gnn[edge_index[1]]
 
         x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
         x = (x + self.fuse_norm(self.fuse(x))) / 2
@@ -340,8 +340,8 @@ class FTTransformerPNAFusedLayer(Module):
         x_tab = torch.cat([x[:,:self.channels].unsqueeze(1), x_tab], dim=1)
         x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
         x_dst_gnn = x[:, self.channels+self.nhidden:]
-        x_gnn[edge_index[0][0:x_tab_cls.shape[0]]] = x_src_gnn
-        x_gnn[edge_index[1][0:x_tab_cls.shape[0]]] = x_dst_gnn
+        x_gnn[edge_index[0]] = x_src_gnn
+        x_gnn[edge_index[1]] = x_dst_gnn
 
         return x_tab, x_gnn, edge_attr
     
