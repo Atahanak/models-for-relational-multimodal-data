@@ -36,7 +36,7 @@ torch.set_float32_matmul_precision('high')
 
 # %%
 seed = 42
-batch_size = 200
+batch_size = 300
 lr = 2e-4
 eps = 1e-8
 weight_decay = 1e-3
@@ -46,19 +46,20 @@ compile = False
 data_split = [0.6, 0.2, 0.2]
 split_type = 'temporal'
 
-khop_neighbors = [100, 100]
+khop_neighbors = [0]
 pos_sample_prob = 0.5
 num_neg_samples = 64
 channels = 128
 num_layers = 3
 dropout = 0.5
 
-pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
+#pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
+pretrain = {PretrainType.LINK_PRED}
 #pretrain = 'lp'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
-    'testing': False,
+    'testing': True,
     'batch_size': batch_size,
     'seed': seed,
     'device': device,
@@ -93,22 +94,45 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-fix", 
-    name=f"pos_sample_prob={pos_sample_prob}",
+    name=f"new,lp-without-masking,mcm",
     #group=f"last-layer-notfused,moco2",
     entity="cse3000",
     #name=f"debug-fused",
     config=args
 )
 
-dataset = IBMTransactionsAML(
+dataset_masked = IBMTransactionsAML(
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    pretrain=pretrain,
+    pretrain={PretrainType.MASK, PretrainType.LINK_PRED},
+    mask_type="replace",
+    split_type=split_type, 
+    splits=data_split, 
+    khop_neighbors=khop_neighbors
+)
+ic(dataset_masked)
+dataset_masked.materialize()
+dataset_masked.df.head(5)
+train_dataset_masked, val_dataset_masked, test_dataset_masked = dataset_masked.split()
+ic(len(train_dataset_masked), len(val_dataset_masked), len(test_dataset_masked))
+
+edge_index = dataset_masked.train_graph.edge_index
+num_nodes = dataset_masked.train_graph.num_nodes
+
+dataset = IBMTransactionsAML(
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    pretrain={PretrainType.LINK_PRED},
     mask_type="replace",
     split_type=split_type, 
     splits=data_split, 
@@ -143,13 +167,16 @@ def seed_worker(worker_id):
     
 g = torch.Generator()
 g.manual_seed(seed)
+
+tensor_frame_masked = dataset.tensor_frame
+train_loader_masked = DataLoader(train_dataset_masked.tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
+val_loader_masked = DataLoader(val_dataset_masked.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+test_loader_masked = DataLoader(test_dataset_masked.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+
 tensor_frame = dataset.tensor_frame
-train_tensor_frame = train_dataset.tensor_frame
-train_loader = DataLoader(train_tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
-val_tensor_frame = val_dataset.tensor_frame
-val_loader = DataLoader(val_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
-test_tensor_frame = test_dataset.tensor_frame
-test_loader = DataLoader(test_tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
+val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
 
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
@@ -163,8 +190,8 @@ model = FTTransformerPNAFused(
     channels=channels,
     out_channels=None,
     col_stats=dataset.col_stats,
-    col_names_dict=train_tensor_frame.col_names_dict,
-    edge_dim=channels*train_dataset.tensor_frame.num_cols,
+    col_names_dict=dataset.tensor_frame.col_names_dict,
+    edge_dim=channels*dataset.tensor_frame.num_cols,
     num_layers=num_layers, 
     dropout=dropout,
     pretrain=True,
@@ -172,10 +199,26 @@ model = FTTransformerPNAFused(
 )
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
-
-def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15):
+def mcm_inputs(tf: TensorFrame, tensor_frame_masked):
     
-    edges = tf.y[:, 2:]
+    edges = tf.y[:,-3:]
+    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
+
+    edge_attr = tensor_frame_masked.__getitem__(idx)
+
+    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+    num_nodes = nodes.shape[0]
+    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
+
+    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+    return node_feats.to(device), edge_index.to(device), edge_attr.to(device) 
+    
+def lp_inputs(tf: TensorFrame, tensor_frame):
+    
+    edges = tf.y[:,-3:]
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
 
@@ -190,8 +233,6 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15):
     local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
     edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
-    if pos_sample_prob == 0:
-        return node_feats.to(device), edge_index.to(device), edge_attr.to(device) 
     # sample positive edges
     positions = torch.arange(batch_size)
     num_samples = int(len(positions) * pos_sample_prob)
@@ -254,12 +295,6 @@ def lp_inputs(tf: TensorFrame, pos_sample_prob=0.15):
         # Add these negative edges to the list
         neg_edges.append(neg_edges_src)
         neg_edges.append(neg_edges_dst)
-        
-        # Replicate the positive edge attribute for each of the negative edges generated from this edge
-        # pos_attr = pos_edge_attr[i]#.unsqueeze(0)  # Get the attribute of the current positive edge
-        
-        # replicated_attr = pos_attr.repeat(num_neg_samples, 1)  # Replicate it num_neg_samples times (for each negative edge)
-        # neg_edge_attr.append(replicated_attr)
     
     input_edge_index = input_edge_index.to(device)
     input_edge_attr = input_edge_attr.to(device)
@@ -290,11 +325,11 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
     loss_accum = total_count = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
 
-    with tqdm(train_loader, desc=f'Epoch {epoc}') as t:
+    with tqdm(train_loader_masked, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr = lp_inputs(tf, 0)
-            #node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, 1)
-            tf = tf.to(device)
+            #node_feats, edge_index, edge_attr = lp_inputs(tf, 0)
+            # node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, tensor_frame)
+            # tf = tf.to(device)
             # _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
             # pos_edge_attr, _ = model.encoder(pos_edge_attr)
             # pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
@@ -304,26 +339,29 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             # neg_edge_attr = model.edge_emb(neg_edge_attr)
             # pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 
+            node_feats, edge_index, edge_attr = mcm_inputs(tf, tensor_frame_masked)
+            ic(node_feats.shape, edge_index.shape)
             x_tab, _ = model(node_feats, edge_index, edge_attr)
             num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
+            num_pred = num_pred.cpu()
+            cat_pred = [x.cpu() for x in cat_pred]
 
             optimizer.zero_grad()
-            #link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            # link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             #link_loss.backward()
-            #optimizer.zero_grad()
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             t_loss.backward()
             #moco_loss = mocoloss.loss([link_loss, t_loss])
             optimizer.step()
 
-            #loss = link_loss.item()# + t_loss.item()
+            #loss = link_loss.item()
             loss = t_loss.item()
             #loss = link_loss.item() + t_loss.item()
 
             loss_accum += (loss * len(tf.y))
             total_count += len(tf.y)
-            #t_c += loss_c[1]
-            #t_n += loss_n[1]
+            t_c += loss_c[1]
+            t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             #loss_lp_accum += link_loss.item() * len(tf.y)
@@ -345,15 +383,17 @@ def eval_mcm(loader: DataLoader, model, mcm_decoder, dataset_name) -> float:
     t_n = t_c = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr = lp_inputs(tf, pos_sample_prob=0)
-            tf.y = tf.y.to(device)
+            node_feats, edge_index, edge_attr = mcm_inputs(tf, tensor_frame_masked)
+            #tf.y = tf.y.to(device)
             x_tab, _ = model(node_feats, edge_index, edge_attr)
             num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
+            num_pred = num_pred.cpu()
+            cat_pred = [x.cpu() for x in cat_pred]
             _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             t_c += loss_c[1]
             t_n += loss_n[1] 
-            loss_c_accum += loss_c[0]
-            loss_n_accum += loss_n[0]
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
             total_count += len(num_pred)
             for i, ans in enumerate(tf.y):
                 if ans[1] > (num_numerical-1):
@@ -393,7 +433,7 @@ def eval_lp(loader: DataLoader, model, lp_decoder, dataset_name) -> float:
     loss_accum = loss_lp_accum = total_count = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, pos_sample_prob=1)
+            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, tensor_frame)
             _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
             pos_edge_attr, _ = model.encoder(pos_edge_attr)
             pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
@@ -472,14 +512,14 @@ num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dat
 mcm_decoder = MCMHead(channels, num_numerical, num_categorical).to(device)
 lp_decoder = LinkPredHead(n_hidden=channels, dropout=dropout).to(device)
 
-# train_mcm = eval_mcm(train_loader, model, mcm_decoder, "tr")
+# train_mcm = eval_mcm(train_loader_masked, model, mcm_decoder, "tr")
 # train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
 
-# val_mcm = eval_mcm(val_loader, model, mcm_decoder, "val")
+# val_mcm = eval_mcm(val_loader_masked, model, mcm_decoder, "val")
 # val_lp = eval_lp(val_loader, model, lp_decoder, "val")
 
-#test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
-#test_lp = eval_lp(test_loader, model, lp_decoder, "test")
+# test_mcm = eval_mcm(test_loader_masked, model, mcm_decoder, "test")
+# test_lp = eval_lp(test_loader, model, lp_decoder, "test")
 # ic(
 #     train_mcm,
 #     train_lp,
@@ -489,7 +529,6 @@ lp_decoder = LinkPredHead(n_hidden=channels, dropout=dropout).to(device)
 #     test_lp
 # )
 
-torch.autograd.set_detect_anomaly(False)
 for epoch in range(1, epochs + 1):
     train_loss = train(epoch, model, optimizer, scheduler)
     #train_loss = train(epoch, model, [optimizer], scheduler)
