@@ -29,25 +29,39 @@ from src.nn.weighting.MoCo import MoCoLoss
 from tqdm import tqdm
 import wandb
 
-from icecream import ic
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set the logging level
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Specify the log message format
+    datefmt='%Y-%m-%d %H:%M:%S',  # Specify the date format
+    handlers=[
+        #logging.FileHandler('app.log'),  # Log messages to a file
+        logging.StreamHandler()  # Also output log messages to the console
+    ]
+)
+
+# Create a logger
+logger = logging.getLogger(__name__)
 import sys
 
 torch.set_float32_matmul_precision('high')
 
 # %%
 seed = 42
-batch_size = 300
+batch_size = 200
 lr = 2e-4
 eps = 1e-8
 weight_decay = 1e-3
-epochs = 30
+epochs = 50
 
 compile = False
 data_split = [0.6, 0.2, 0.2]
 split_type = 'temporal'
 
-khop_neighbors = [0]
-pos_sample_prob = 0.5
+khop_neighbors = [100, 100]
+pos_sample_prob = 1
 num_neg_samples = 64
 channels = 128
 num_layers = 3
@@ -59,7 +73,7 @@ pretrain = {PretrainType.LINK_PRED}
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
-    'testing': True,
+    'testing': False,
     'batch_size': batch_size,
     'seed': seed,
     'device': device,
@@ -94,8 +108,8 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-fix", 
-    name=f"new,lp-without-masking,mcm",
-    #group=f"last-layer-notfused,moco2",
+    name=f"new,mcm,large-hidden-fuse,tabconvinedgeemb",
+    group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
     config=args
@@ -103,10 +117,10 @@ run = wandb.init(
 
 dataset_masked = IBMTransactionsAML(
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
     pretrain={PretrainType.MASK, PretrainType.LINK_PRED},
@@ -115,37 +129,37 @@ dataset_masked = IBMTransactionsAML(
     splits=data_split, 
     khop_neighbors=khop_neighbors
 )
-ic(dataset_masked)
+logger.info(f"dataset_masked: {dataset_masked}")
 dataset_masked.materialize()
 dataset_masked.df.head(5)
 train_dataset_masked, val_dataset_masked, test_dataset_masked = dataset_masked.split()
-ic(len(train_dataset_masked), len(val_dataset_masked), len(test_dataset_masked))
+logger.info(f"train_dataset_masked: {len(train_dataset_masked)}")
+logger.info(f"val_dataset_masked: {len(val_dataset_masked)}")
+logger.info(f"test_dataset_masked: {len(test_dataset_masked)}")
 
 edge_index = dataset_masked.train_graph.edge_index
 num_nodes = dataset_masked.train_graph.num_nodes
 
-dataset = IBMTransactionsAML(
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    pretrain={PretrainType.LINK_PRED},
-    mask_type="replace",
-    split_type=split_type, 
-    splits=data_split, 
-    khop_neighbors=khop_neighbors
-)
-ic(dataset)
-dataset.materialize()
-dataset.df.head(5)
-train_dataset, val_dataset, test_dataset = dataset.split()
-ic(len(train_dataset), len(val_dataset), len(test_dataset))
+# dataset = IBMTransactionsAML(
+#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+#     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+#     #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
+#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
+#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+#     pretrain={PretrainType.LINK_PRED},
+#     mask_type="replace",
+#     split_type=split_type, 
+#     splits=data_split, 
+#     khop_neighbors=khop_neighbors
+# )
+# dataset.materialize()
+# dataset.df.head(5)
+# train_dataset, val_dataset, test_dataset = dataset.split()
 
-edge_index = dataset.train_graph.edge_index
-num_nodes = dataset.train_graph.num_nodes
+# edge_index = dataset.train_graph.edge_index
+# num_nodes = dataset.train_graph.num_nodes
 
 # Compute the in-degree for each node
 in_degrees = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
@@ -168,20 +182,24 @@ def seed_worker(worker_id):
 g = torch.Generator()
 g.manual_seed(seed)
 
-tensor_frame_masked = dataset.tensor_frame
+tensor_frame_masked = dataset_masked.tensor_frame
 train_loader_masked = DataLoader(train_dataset_masked.tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
 val_loader_masked = DataLoader(val_dataset_masked.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
 test_loader_masked = DataLoader(test_dataset_masked.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+num_numerical = len(dataset_masked.tensor_frame.col_names_dict[stype.numerical])
+num_categorical = len(dataset_masked.tensor_frame.col_names_dict[stype.categorical])
 
-tensor_frame = dataset.tensor_frame
-train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
-val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
-test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+# tensor_frame = dataset.tensor_frame
+# train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g, num_workers=4)
+# val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
+# test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
+# num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
+# num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 
-num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 num_columns = num_numerical + num_categorical
-ic(num_numerical, num_categorical, num_columns)
+logger.info(f"num_numerical: {num_numerical}")
+logger.info(f"num_categorical: {num_categorical}")
+logger.info(f"num_columns: {num_columns}")
 
 ssloss = SSLoss(device, num_numerical)
 ssmetric = SSMetric(device)
@@ -189,9 +207,9 @@ ssmetric = SSMetric(device)
 model = FTTransformerPNAFused(
     channels=channels,
     out_channels=None,
-    col_stats=dataset.col_stats,
-    col_names_dict=dataset.tensor_frame.col_names_dict,
-    edge_dim=channels*dataset.tensor_frame.num_cols,
+    col_stats=dataset_masked.col_stats,
+    col_names_dict=dataset_masked.tensor_frame.col_names_dict,
+    edge_dim=channels*dataset_masked.tensor_frame.num_cols,
     num_layers=num_layers, 
     dropout=dropout,
     pretrain=True,
@@ -199,10 +217,11 @@ model = FTTransformerPNAFused(
 )
 model = torch.compile(model, dynamic=True) if compile else model
 model.to(device)
+
 def mcm_inputs(tf: TensorFrame, tensor_frame_masked):
-    
+    batch_size = len(tf.y)
     edges = tf.y[:,-3:]
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
+    khop_source, khop_destination, idx = dataset_masked.sample_neighbors(edges, 'train')
 
     edge_attr = tensor_frame_masked.__getitem__(idx)
 
@@ -214,13 +233,14 @@ def mcm_inputs(tf: TensorFrame, tensor_frame_masked):
     local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
     local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
     edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-    return node_feats.to(device), edge_index.to(device), edge_attr.to(device) 
+    target_edge_index = edge_index[:, :batch_size]
+    return node_feats.to(device), edge_index.to(device), edge_attr.to(device), target_edge_index.to(device)  
     
 def lp_inputs(tf: TensorFrame, tensor_frame):
     
     edges = tf.y[:,-3:]
     batch_size = len(edges)
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, train)
+    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
 
     edge_attr = tensor_frame.__getitem__(idx)
 
@@ -253,21 +273,17 @@ def lp_inputs(tf: TensorFrame, tensor_frame):
 
     # generate/sample negative edges
     neg_edges = []
-    #ic(pos_edge_attr.feat_dict)
-    neg_dict = {}
+    target_dict = pos_edge_attr.feat_dict
     for key, value in pos_edge_attr.feat_dict.items():
-        #ic(key, value.shape)
         attr = []
         # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
         for r in value:
-            #ic(r.shape)
             if key == stype.timestamp:
                 attr.append(r.repeat(num_neg_samples, 1, 1))
             else:
                 attr.append(r.repeat(num_neg_samples, 1))
-        neg_dict[key] = torch.cat(attr, dim=0)
-    #ic(neg_dict)
-    neg_edge_attr = TensorFrame(neg_dict, pos_edge_attr.col_names_dict)
+        target_dict[key] = torch.cat([target_dict[key], torch.cat(attr, dim=0)], dim=0)
+    target_edge_attr = TensorFrame(target_dict, pos_edge_attr.col_names_dict)
 
     nodeset = set(range(edge_index.max()+1))
     for i, edge in enumerate(pos_edge_index.t()):
@@ -298,15 +314,18 @@ def lp_inputs(tf: TensorFrame, tensor_frame):
     
     input_edge_index = input_edge_index.to(device)
     input_edge_attr = input_edge_attr.to(device)
-    pos_edge_index = pos_edge_index.to(device)
-    pos_edge_attr = pos_edge_attr.to(device)
+    #pos_edge_index = pos_edge_index.to(device)
+    #pos_edge_attr = pos_edge_attr.to(device)
     node_feats = node_feats.to(device)
     if len(neg_edges) > 0:
-        neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-    neg_edge_attr = neg_edge_attr.to(device)
+        #neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
+        neg_edge_index = torch.cat(neg_edges, dim=1)
+    target_edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1).to(device)
+    target_edge_attr = target_edge_attr.to(device)
     edge_index = edge_index.to(device)
     edge_attr = edge_attr.to(device)
-    return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
+    #return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr
+    return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr
 
 def optimizer_step(optimizers, losses):
     if len(optimizers) != len(losses):
@@ -320,34 +339,33 @@ def optimizer_step(optimizers, losses):
         loss.backward(retain_graph=(i < len(optimizers)-1))
         optimizer.step()
 
-def train(epoc: int, model, optimizer, scheduler) -> float:
+def train_mcm(loader, epoc: int, model, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
 
-    with tqdm(train_loader_masked, desc=f'Epoch {epoc}') as t:
+    with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            #node_feats, edge_index, edge_attr = lp_inputs(tf, 0)
-            # node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, tensor_frame)
-            # tf = tf.to(device)
-            # _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
-            # pos_edge_attr, _ = model.encoder(pos_edge_attr)
-            # pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
-            # pos_edge_attr = model.edge_emb(pos_edge_attr)
-            # neg_edge_attr, _ = model.encoder(neg_edge_attr)
-            # neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
-            # neg_edge_attr = model.edge_emb(neg_edge_attr)
-            # pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            batch_size = len(tf.y)
+            #node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
+            #tf = tf.to(device)
+            #edge_emb = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr)
+            #logger.info(f"edge_emb: {edge_emb.shape}")
+            #pos_emb = edge_emb[:batch_size, :]
+            #neg_emb = edge_emb[batch_size:, :]
+            #logger.info(f"pos_emb: {pos_emb.shape}")
+            #logger.info(f"neg_emb: {neg_emb.shape}")
+            #pos_pred, neg_pred = lp_decoder(pos_emb, neg_emb)
 
-            node_feats, edge_index, edge_attr = mcm_inputs(tf, tensor_frame_masked)
-            ic(node_feats.shape, edge_index.shape)
-            x_tab, _ = model(node_feats, edge_index, edge_attr)
-            num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
-            num_pred = num_pred.cpu()
+            node_feats, edge_index, edge_attr, target_edge_index = mcm_inputs(tf, tensor_frame_masked)
+            tf = tf.to(device)
+            emb = model(node_feats, edge_index, edge_attr, target_edge_index, tf)
+            cls = emb[:, :channels]
+            num_pred, cat_pred = mcm_decoder(cls)
             cat_pred = [x.cpu() for x in cat_pred]
 
             optimizer.zero_grad()
-            # link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            #link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             #link_loss.backward()
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             t_loss.backward()
@@ -374,6 +392,32 @@ def train(epoc: int, model, optimizer, scheduler) -> float:
             #wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count})
     return {'loss': loss_accum / total_count}
 
+def train_lp(loader, epoc: int, model, optimizer, scheduler) -> float:
+    model.train()
+    total_count = 0
+    loss_lp_accum = 0
+
+    with tqdm(loader, desc=f'Epoch {epoc}') as t:
+        for tf in t:
+            batch_size = len(tf.y)
+            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
+            tf = tf.to(device)
+            edge_emb = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr)
+            pos_emb = edge_emb[:batch_size, :]
+            neg_emb = edge_emb[batch_size:, :]
+            pos_pred, neg_pred = lp_decoder(pos_emb, neg_emb)
+
+            optimizer.zero_grad()
+            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            link_loss.backward()
+            optimizer.step()
+
+            total_count += len(tf.y)
+            loss_lp_accum += link_loss.item() * len(tf.y)
+            t.set_postfix(loss_lp=f'{loss_lp_accum/total_count:.4f}')
+            wandb.log({"train_loss_lp": loss_lp_accum/total_count})
+    return {'loss': loss_lp_accum / total_count} 
+
 @torch.no_grad()
 def eval_mcm(loader: DataLoader, model, mcm_decoder, dataset_name) -> float:
     model.eval()
@@ -383,10 +427,11 @@ def eval_mcm(loader: DataLoader, model, mcm_decoder, dataset_name) -> float:
     t_n = t_c = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr = mcm_inputs(tf, tensor_frame_masked)
-            #tf.y = tf.y.to(device)
-            x_tab, _ = model(node_feats, edge_index, edge_attr)
-            num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
+            node_feats, edge_index, edge_attr, target_edge_index = mcm_inputs(tf, tensor_frame_masked)
+            tf = tf.to(device)
+            emb = model(node_feats, edge_index, edge_attr, target_edge_index, tf)
+            cls = emb[:, :channels]
+            num_pred, cat_pred = mcm_decoder(cls)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
             _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
@@ -433,15 +478,12 @@ def eval_lp(loader: DataLoader, model, lp_decoder, dataset_name) -> float:
     loss_accum = loss_lp_accum = total_count = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, _, _, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr = lp_inputs(tf, tensor_frame)
-            _, x_gnn = model(node_feats, input_edge_index, input_edge_attr)
-            pos_edge_attr, _ = model.encoder(pos_edge_attr)
-            pos_edge_attr = pos_edge_attr.view(-1, model.edge_dim)
-            pos_edge_attr = model.edge_emb(pos_edge_attr)
-            neg_edge_attr, _ = model.encoder(neg_edge_attr)
-            neg_edge_attr = neg_edge_attr.view(-1, model.edge_dim)
-            neg_edge_attr = model.edge_emb(neg_edge_attr)
-            pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            batch_size = len(tf.y)
+            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
+            edge_emb = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr)
+            pos_emb = edge_emb[:batch_size, :]
+            neg_emb = edge_emb[batch_size:, :]
+            pos_pred, neg_pred = lp_decoder(pos_emb, neg_emb)
             loss = ssloss.lp_loss(pos_pred, neg_pred)
             
             loss_lp_accum += loss * len(pos_pred)
@@ -481,7 +523,7 @@ def eval_lp(loader: DataLoader, model, lp_decoder, dataset_name) -> float:
 mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 #mocoloss = MoCoLoss(model, 3, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-ic(learnable_params)
+logger.info(f"learnable_params: {learnable_params}")
 wandb.log({"learnable_params": learnable_params})
 
 no_decay = ['bias', 'LayerNorm.weight']
@@ -490,65 +532,69 @@ optimizer_grouped_parameters = [
     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
 ]
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
-params_lp = [
-        {'params': [param for name, param in model.named_parameters() if 'tab_conv' not in name and 'mcm_decoder' not in name and not any(nd in name for nd in no_decay)], 'weight_decay': weight_decay},
-        {'params': [param for name, param in model.named_parameters() if 'tab_conv' not in name and 'mcm_decoder' not in name and any(nd in name for nd in no_decay)], 'weight_decay': 0.0},
-]
-#params_lp = [param for name, param in model.named_parameters() if 'tab_conv' not in name and 'mcm_decoder' not in name]
-params_mcm = [
-        {'params': [param for name, param in model.named_parameters() if 'gnn_conv' not in name and 'lp_decoder' not in name and not any(nd in name for nd in no_decay)], 'weight_decay': weight_decay},
-        {'params': [param for name, param in model.named_parameters() if 'gnn_conv' not in name and 'lp_decoder' not in name and any(nd in name for nd in no_decay)], 'weight_decay': 0.0},
-]
-#params_mcm = [param for name, param in model.named_parameters() if 'lp_decoder' not in name and 'gnn_conv' not in name]
-
-optimizer_mcm = torch.optim.AdamW(params_mcm, lr=lr, eps=eps, weight_decay=weight_decay)
-optimizer_lp = torch.optim.AdamW(params_lp, lr=lr, eps=eps, weight_decay=weight_decay)
-scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer_mcm, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
+scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
 
 from src.nn.decoder import MCMHead
-from src.nn.gnn.decoder import LinkPredHead
+from src.nn.gnn.decoder import LinkPredFusedHead
 from torch_frame.data.stats import StatType
-num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
+num_categorical = [len(dataset_masked.col_stats[col][StatType.COUNT][0]) for col in dataset_masked.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset_masked.tensor_frame.col_names_dict else 0
 mcm_decoder = MCMHead(channels, num_numerical, num_categorical).to(device)
-lp_decoder = LinkPredHead(n_hidden=channels, dropout=dropout).to(device)
+lp_decoder = LinkPredFusedHead(n_hidden=channels, dropout=dropout).to(device)
 
 # train_mcm = eval_mcm(train_loader_masked, model, mcm_decoder, "tr")
-# train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
+#train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
 
 # val_mcm = eval_mcm(val_loader_masked, model, mcm_decoder, "val")
 # val_lp = eval_lp(val_loader, model, lp_decoder, "val")
 
 # test_mcm = eval_mcm(test_loader_masked, model, mcm_decoder, "test")
 # test_lp = eval_lp(test_loader, model, lp_decoder, "test")
-# ic(
-#     train_mcm,
-#     train_lp,
-#     val_mcm,
-#     val_lp,
-#     test_mcm,
-#     test_lp
-# )
-
-for epoch in range(1, epochs + 1):
-    train_loss = train(epoch, model, optimizer, scheduler)
-    #train_loss = train(epoch, model, [optimizer], scheduler)
-    #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
-    #train_metric = test(train_loader, model, "tr")
-    val_mcm = eval_mcm(val_loader, model, mcm_decoder, "val")
-    #val_lp = eval_lp(val_loader, model, lp_decoder, "val")
-    test_mcm = eval_mcm(test_loader, model, mcm_decoder, "test")
-    #test_lp = eval_lp(test_loader, model, lp_decoder, "test")
 
 # Create a directory to save models
-#save_dir = '/scratch/takyildiz/.cache/saved_models'
-#run_id = wandb.run.id
-#os.makedirs(save_dir, exist_ok=True)
-#model_save_path = os.path.join(save_dir, f'latest_model_run_{run_id}.pth')
-#
-## Save the model after each epoch, replacing the old model
-#torch.save(model.state_dict(), model_save_path)
-#ic(f'Model saved to {model_save_path}')
-# %%
+save_dir = '/mnt/data/.cache/saved_models'
+run_id = wandb.run.id
+os.makedirs(save_dir, exist_ok=True)
+best_lp = 0
+best_acc = 0
+best_rmse = 2
+
+for epoch in range(1, epochs + 1):
+    logger.info(f"Epoch {epoch}:")
+    mcm_loss = train_mcm(train_loader_masked, epoch, model, optimizer, scheduler)
+    logger.info(f"loss_mcm: {mcm_loss}")
+    # lp_loss = train_lp(train_loader, epoch, model, optimizer, scheduler)
+    # logger.info(f"loss_lp: {lp_loss}")
+    #train_loss = train(epoch, model, [optimizer], scheduler)
+    #train_loss = train(epoch, model, [optimizer_lp, optimizer_mcm], scheduler)
+    # tr_lp = eval_lp(train_loader, model, lp_decoder, "tr")
+    # logger.info(f"tr_lp: {tr_lp}")
+    val_mcm = eval_mcm(val_loader_masked, model, mcm_decoder, "val")
+    logger.info(f"val_mcm: {val_mcm}")
+    # val_lp = eval_lp(val_loader, model, lp_decoder, "val")
+    # logger.info(f"val_lp: {val_lp}")
+
+    test_mcm = eval_mcm(test_loader_masked, model, mcm_decoder, "test")
+    logger.info(f"test_mcm: {test_mcm}")
+    if best_acc < test_mcm['accuracy']:
+        model_save_path = os.path.join(save_dir, f'{run_id}_acc.pth')
+        best_acc = test_mcm['accuracy']
+        torch.save(model.state_dict(), model_save_path)
+        logger.info(f'Best ACC model saved to {model_save_path}')
+    if best_rmse > test_mcm['rmse']:
+        model_save_path = os.path.join(save_dir, f'{run_id}_rmse.pth')
+        best_acc = test_mcm['rmse']
+        torch.save(model.state_dict(), model_save_path)
+        logger.info(f'Best RMSE model saved to {model_save_path}')
+
+    # test_lp = eval_lp(test_loader, model, lp_decoder, "test")
+    # logger.info(f"test_lp: {test_lp}")
+    # if test_lp['mrr'] > best_lp:
+    #     model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
+    #     best_lp = test_lp['mrr']
+    #     torch.save(model.state_dict(), model_save_path)
+    #     logger.info(f'Best MRR model saved to {model_save_path}')
+
+
 wandb.finish()
 
 

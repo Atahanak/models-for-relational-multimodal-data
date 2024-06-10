@@ -37,7 +37,8 @@ from ..decoder import SelfSupervisedLPHead
 from ..decoder import SupervisedHead
 from ..decoder import SelfSupervised_MCM_MV_LP_Head
 
-from icecream import ic
+import logging
+logger = logging.getLogger(__name__)
 import sys
 
 class FTTransformerPNAFused(Module):
@@ -133,43 +134,55 @@ class FTTransformerPNAFused(Module):
         
         # PNA
         self.node_emb = Linear(node_dim, nhidden)
-        self.edge_emb = Linear(edge_dim, nhidden)
+        #self.edge_emb = Linear(edge_dim, nhidden)
+        self.tab_conv = TransformerEncoderLayer(
+            d_model=channels,
+            nhead=nhead,
+            dim_feedforward=feedforward_channels or channels,
+            dropout=dropout,
+            activation=activation,
+            # Input and output tensors are provided as
+            # [batch_size, seq_len, channels]
+            batch_first=True,
+        )
+        self.tab_norm = LayerNorm(channels)
 
         #backbone
         self.backbone = ModuleList()
-        for i in range(num_layers):
-            if i == num_layers - 1:
-                self.backbone.append(
-                    FTTransformerPNAParallelLayer(
-                        channels, 
-                        nhead, 
-                        feedforward_channels, 
-                        dropout, 
-                        activation, 
-                        nhidden,
-                        final_dropout,
-                        deg
-                    )
+        for i in range(num_layers-1):
+            self.backbone.append(
+                FTTransformerPNAParallelLayer(
+                    channels, 
+                    nhead, 
+                    feedforward_channels, 
+                    dropout, 
+                    activation, 
+                    nhidden,
+                    final_dropout,
+                    deg
                 )
-            else:
-                self.backbone.append(
-                    FTTransformerPNAFusedLayer(
-                        channels, 
-                        nhead, 
-                        feedforward_channels, 
-                        dropout, 
-                        activation, 
-                        nhidden,
-                        final_dropout,
-                        deg
-                    )
-                )
+            )
+        
+        self.fuse = FTTransformerPNAFusedLayer(
+                channels, 
+                nhead, 
+                feedforward_channels, 
+                dropout, 
+                activation, 
+                nhidden,
+                final_dropout,
+                deg
+        )
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         torch.nn.init.normal_(self.cls_embedding, std=0.01)
         self.node_emb.reset_parameters()
-        self.edge_emb.reset_parameters()
+        #self.edge_emb.reset_parameters()
+        self.tab_norm.reset_parameters()
+        for p in self.tab_conv.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
         self.encoder.reset_parameters()
         for layer in self.backbone:
             layer.reset_parameters()
@@ -180,7 +193,7 @@ class FTTransformerPNAFused(Module):
             self.encoder.parameters(),
             [self.cls_embedding],  # Wrap single parameters in a list
             self.node_emb.parameters(),
-            self.edge_emb.parameters(),
+            #self.edge_emb.parameters(),
             self.backbone[:-1].parameters(),
         ]
         
@@ -194,7 +207,7 @@ class FTTransformerPNAFused(Module):
             if param.grad is not None:
                 param.grad.data.zero_()
 
-    def forward(self, x, edge_index, edge_attr) -> Tensor:
+    def forward(self, x, edge_index, edge_attr, target_edge_index, target_edge_attr) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -204,62 +217,26 @@ class FTTransformerPNAFused(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
-        B = len(edge_attr)
+        B = len(target_edge_attr)
 
         x_gnn = self.node_emb(x)
-        edge_attr, _ = self.encoder(edge_attr)
+        target_edge_attr, _ = self.encoder(target_edge_attr)
         
         x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, edge_attr], dim=1)
+        x_tab = torch.cat([x_cls, target_edge_attr], dim=1)
 
-        edge_attr = edge_attr.view(-1, self.edge_dim)
-        edge_attr = self.edge_emb(edge_attr)
-
-        for fused_layer in self.backbone:
-            x_tab, x_gnn, edge_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
-            #x_tab, x_gnn, edge_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr, pos_edge_index)
-            #x_t, x_g, e_attr = fused_layer(x_tab, x_gnn, edge_index, edge_attr)
-            # x_tab = x_tab + x_t
-            # x_gnn = x_gnn + x_g
-            # edge_attr = edge_attr + e_attr
-
-        # pos_edge_attr, _ = self.encoder(pos_edge_attr)
-        # pos_edge_attr = pos_edge_attr.view(-1, self.edge_dim)
-        # pos_edge_attr = self.edge_emb(pos_edge_attr)
-        # neg_edge_attr, _ = self.encoder(neg_edge_attr)
-        # neg_edge_attr = neg_edge_attr.view(-1, self.edge_dim)
-        # neg_edge_attr = self.edge_emb(neg_edge_attr)
-        # if self.pretrain:
-        #     out = self.decoder(x_tab[:, 0, :], x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-        # else:
-        #     out = self.decoder(x)
-        # return out
-        return x_tab, x_gnn
-
-    def forward_nm(self, x, edge_index, edge_attr) -> Tensor:
-        r"""Transforming :class:`TensorFrame` object into output prediction.
-
-        Args:
-            tf (TensorFrame):
-                Input :class:`TensorFrame` object.
-
-        Returns:
-            torch.Tensor: Output of shape [batch_size, out_channels].
-        """
-        B = len(edge_attr)
-
-        x_gnn = self.node_emb(x)
         edge_attr, _ = self.encoder(edge_attr)
-        
-        x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, edge_attr], dim=1)
+        # edge_attr = edge_attr.view(-1, self.edge_dim)
+        # edge_attr = self.edge_emb(edge_attr)
+        x_edge = self.cls_embedding.repeat(edge_index.shape[1], 1, 1)
+        edge_attr = torch.cat([x_edge, edge_attr], dim=1)
+        edge_attr = self.tab_norm(self.tab_conv(edge_attr))
+        edge_attr, _ = edge_attr[:, 0, :], edge_attr[:, 1:, :]
 
-        edge_attr = edge_attr.view(-1, self.edge_dim)
-        edge_attr = self.edge_emb(edge_attr)
-
-        for fused_layer in self.backbone:
-            x_tab, x_gnn, edge_attr = fused_layer.forward_nm(x_tab, x_gnn, edge_index, edge_attr)
-        return x_tab, x_gnn
+        for layer in self.backbone:
+            x_tab, x_gnn = layer(x_tab, x_gnn, edge_index, edge_attr)
+        emb = self.fuse(x_tab, x_gnn, edge_index, edge_attr, target_edge_index) 
+        return emb
 
 class FTTransformerPNAFusedLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
@@ -294,20 +271,15 @@ class FTTransformerPNAFusedLayer(Module):
                                 deg=deg)
 
         self.gnn_norm = BatchNorm(nhidden)
-        # self.edge = Sequential(
-        #     Linear(3 * nhidden, nhidden),
-        #     ReLU(),
-        #     Linear(nhidden, nhidden),
-        # )
 
         # fuse
         self.fuse = Sequential(
             LayerNorm(fused_dim),
-            Linear(fused_dim, fused_dim), 
+            Linear(fused_dim, 4*fused_dim), 
             LeakyReLU(), Dropout(final_dropout), 
-            Linear(fused_dim, fused_dim), LeakyReLU(), 
+            Linear(4*fused_dim, 4*fused_dim), LeakyReLU(), 
             Dropout(final_dropout),
-            Linear(fused_dim, fused_dim)
+            Linear(4*fused_dim, fused_dim)
         )
         self.fuse_norm = LayerNorm(fused_dim)
         self.reset_parameters()
@@ -326,39 +298,22 @@ class FTTransformerPNAFusedLayer(Module):
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
 
-    def forward(self, x_tab, x_gnn, edge_index, edge_attr):
+    def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index):
         x_tab = self.tab_norm(self.tab_conv(x_tab))
-        x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+        x_tab_cls, _ = x_tab[:, 0, :], x_tab[:, 1:, :]
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
 
-        x = torch.cat([x_tab_cls, x_gnn[edge_index[0]], x_gnn[edge_index[1]]], dim=-1)
+        x = torch.cat([x_tab_cls, x_gnn[target_edge_index[0]], x_gnn[target_edge_index[1]]], dim=-1)
         x = (x + self.fuse_norm(self.fuse(x))) / 2
 
-        x_tab = torch.cat([(x_tab_cls + x[:,:self.channels].unsqueeze(1)) / 2, x_tab], dim=1)
-        x_gnn[edge_index[0]] = (x_gnn[edge_index[0]] + x[:, self.channels:self.channels+self.nhidden]) / 2
-        x_gnn[edge_index[1]] = (x_gnn[edge_index[1]] + x[:, self.channels+self.nhidden:]) / 2
+        #x_tab_cls = (x_tab_cls + x[:,:self.channels]) / 2
+        # x_tab = torch.cat([x_tab_cls.unsqueeze(1), x_tab_feat], dim=1)
 
-        return x_tab, x_gnn, edge_attr
-    
-    def forward_nm(self, x_tab, x_gnn, edge_index, edge_attr):
-        x_tab = self.tab_norm(self.tab_conv(x_tab))
-        x_tab_cls, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+        # x_gnn[target_edge_index[0]] = (x_gnn[target_edge_index[0]] + x[:, self.channels:self.channels+self.nhidden]) / 2
+        # x_gnn[target_edge_index[1]] = (x_gnn[target_edge_index[1]] + x[:, self.channels+self.nhidden:]) / 2
 
-        #x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-        x_src_gnn = x_gnn[edge_index[0]]
-        x_dst_gnn = x_gnn[edge_index[1]]
-
-        x = torch.cat([x_tab_cls, x_src_gnn, x_dst_gnn], dim=-1)
-        x = (x + self.fuse_norm(self.fuse(x))) / 2
-
-        x_tab = torch.cat([(x_tab_cls + x[:,:self.channels].unsqueeze(1)) / 2, x_tab], dim=1)
-        x_src_gnn = x[:, self.channels:self.channels+self.nhidden]
-        x_dst_gnn = x[:, self.channels+self.nhidden:]
-        x_gnn[edge_index[0]] = (x_gnn[edge_index[0]] + x_src_gnn) / 2
-        x_gnn[edge_index[1]] = (x_gnn[edge_index[1]] + x_dst_gnn) / 2
-
-        return x_tab, x_gnn, edge_attr
+        return x
     
 class FTTransformerPNAParallelLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
@@ -404,8 +359,4 @@ class FTTransformerPNAParallelLayer(Module):
     def forward(self, x_tab, x_gnn, edge_index, edge_attr):
        x_tab = self.tab_norm(self.tab_conv(x_tab))
        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-       return x_tab, x_gnn, edge_attr
-
-    def forward_nm(self, x_tab, edge_index, edge_attr):
-       x_tab = self.tab_norm(self.tab_conv(x_tab))
-       return x_tab
+       return x_tab, x_gnn
