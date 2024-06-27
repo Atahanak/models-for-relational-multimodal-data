@@ -83,31 +83,31 @@ class FTTransformer(Module):
         self.backbone = FTTransformerConvs(channels=channels,
                                            num_layers=num_layers)
         
-        if pretrain:
-            num_numerical = len(col_names_dict[stype.numerical])
-            num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
+        # if pretrain:
+        #     num_numerical = len(col_names_dict[stype.numerical])
+        #     num_categorical = [len(col_stats[col][StatType.COUNT][0]) for col in col_names_dict[stype.categorical]]
 
-            if PretrainType.MASK_VECTOR in pretrain:
-                self.decoder = SelfSupervisedMVHead(channels, num_numerical, num_categorical)
-            else:
-                self.decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
-            # self.num_decoder = Sequential(
-            #     LayerNorm(channels),
-            #     ReLU(),
-            #     Linear(channels, num_numerical),
-            # )
-            # self.cat_decoder = ModuleList([Sequential(
-            #     LayerNorm(channels),
-            #     ReLU(),
-            #     Linear(channels, num_classes),
-            # ) for num_classes in num_categorical])
-        else:
-            # self.decoder = Sequential(
-            #     LayerNorm(channels),
-            #     ReLU(),
-            #     Linear(channels, out_channels),
-            # )
-            self.decoder = SupervisedHead(channels, out_channels)
+        #     if PretrainType.MASK_VECTOR in pretrain:
+        #         self.decoder = SelfSupervisedMVHead(channels, num_numerical, num_categorical)
+        #     else:
+        #         self.decoder = SelfSupervisedHead(channels, num_numerical, num_categorical)
+        #     # self.num_decoder = Sequential(
+        #     #     LayerNorm(channels),
+        #     #     ReLU(),
+        #     #     Linear(channels, num_numerical),
+        #     # )
+        #     # self.cat_decoder = ModuleList([Sequential(
+        #     #     LayerNorm(channels),
+        #     #     ReLU(),
+        #     #     Linear(channels, num_classes),
+        #     # ) for num_classes in num_categorical])
+        # else:
+        #     # self.decoder = Sequential(
+        #     #     LayerNorm(channels),
+        #     #     ReLU(),
+        #     #     Linear(channels, out_channels),
+        #     # )
+        #     self.decoder = SupervisedHead(channels, out_channels)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -127,10 +127,11 @@ class FTTransformer(Module):
         """
         x, _ = self.encoder(tf)
         x, x_cls = self.backbone(x)
+        return x, x_cls
         # if self.pretrain:
         #     # num_out = self.num_decoder(x_cls)
         #     # cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
         #     # out = (num_out, cat_out)
         # else:
-        out = self.decoder(x_cls)
-        return out
+        # out = self.decoder(x_cls)
+        # return out

@@ -94,7 +94,7 @@ class PNA(torch.nn.Module):
         for _ in range(self.num_gnn_layers):
             conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
                            aggregators=aggregators, scalers=scalers, deg=deg,
-                           edge_dim=n_hidden, towers=5, pre_layers=1, post_layers=1,
+                           edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
                            divide_input=False)
             if self.edge_updates: self.emlps.append(nn.Sequential(
                 nn.Linear(3 * self.n_hidden, self.n_hidden),
@@ -104,13 +104,9 @@ class PNA(torch.nn.Module):
             self.convs.append(conv)
             self.batch_norms.append(BatchNorm(n_hidden))
 
-        # self.mlp = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(self.final_dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
-        #                       Linear(25, n_classes))
-        self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, final_dropout=final_dropout)
+        # self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, dropout=final_dropout)
 
     def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
-        src, dst = edge_index
-
         x = self.node_emb(x)
         edge_attr = self.edge_emb(edge_attr)
         pos_edge_attr = self.edge_emb(pos_edge_attr)
@@ -122,8 +118,8 @@ class PNA(torch.nn.Module):
                 src, dst = edge_index
                 edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
 
-        # return self.mlp(out)
-        return self.decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+        return x, pos_edge_attr, neg_edge_attr
+        #return self.decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
     
     def loss_fn(self, input1, input2):
         # input 1 is pos_preds and input_2 is neg_preds
