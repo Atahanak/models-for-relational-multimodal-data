@@ -110,7 +110,7 @@ class New(Module):
         self.pretrain = pretrain
         self.channels = channels
         self.nhidden = nhidden
-        self.edge_dim = edge_dim
+        self.edge_dim = edge_dim + channels
         
         if encoder is None:
             if stype_encoder_dict is None:
@@ -134,7 +134,7 @@ class New(Module):
         
         # PNA
         self.node_emb = Linear(node_dim, nhidden)
-        self.edge_emb = Linear(edge_dim, nhidden)
+        self.edge_emb = Linear(self.edge_dim, nhidden)
         self.tab_conv = TransformerEncoderLayer(
             d_model=channels,
             nhead=nhead,
@@ -234,18 +234,18 @@ class New(Module):
         x_edge = self.cls_embedding.repeat(edge_index.shape[1], 1, 1)
         edge_attr = torch.cat([x_edge, edge_attr], dim=1)
         edge_attr = self.tab_norm(self.tab_conv(edge_attr))
-        # edge_attr, _ = edge_attr[:, 0, :], edge_attr[:, 1:, :]
+        #edge_attr, _ = edge_attr[:, 0, :], edge_attr[:, 1:, :]
 
-        _, edge_attr = edge_attr[:, 0, :], edge_attr[:, 1:, :]
+        #_, edge_attr = edge_attr[:, 0, :], edge_attr[:, 1:, :]
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
         for layer in self.backbone:
-            x_t = x_tab
-            x_g = x_gnn
+            # x_t = x_tab
+            # x_g = x_gnn
             x_tab, x_gnn, edge_attr = layer(x_tab, x_gnn, edge_index, edge_attr, target_edge_index, lp)
-            x_tab = (x_tab + x_t)/2
-            x_gnn = (x_gnn + x_g)/2
+            # x_tab = (x_tab + x_t)/2
+            # x_gnn = (x_gnn + x_g)/2
 
 
         # x_edge = self.cls_embedding.repeat(target_edge_index.shape[1], 1, 1)
@@ -257,8 +257,9 @@ class New(Module):
         # target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
         # target_edge_attr = self.edge_emb(target_edge_attr)
         # return target_edge_attr, x_gnn
-        # x_tab, _ = x_tab[:, 0, :], x_tab[:, 1:, :]
-        _, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
+
+        #x_tab, _ = x_tab[:, 0, :], x_tab[:, 1:, :]
+        #_, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
         x_tab = x_tab.view(-1, self.edge_dim)
         x_tab = self.edge_emb(x_tab)
         return x_tab, x_gnn
@@ -423,97 +424,9 @@ class FTTransformerPNAParallelLayer(Module):
         self.gnn_norm.reset_parameters()
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index=None, lp=False):
-       x_tab = self.tab_norm(self.tab_conv(x_tab))
+       #x_tab = self.tab_norm(self.tab_conv(x_tab))
        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
        src, dst = edge_index
        edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
        return x_tab, x_gnn, edge_attr
-
-
-"""GNN model class definitions."""
-import torch.nn as nn
-from torch_geometric.nn import BatchNorm, Linear, PNAConv
-import torch.nn.functional as F
-import torch
-from ..gnn.decoder import LinkPredHead
-    
-class PNA(torch.nn.Module):
-    def __init__(self, num_features, num_gnn_layers, n_classes=2, 
-                n_hidden=128, edge_updates=True,
-                edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None, encoder=None):
-        super().__init__()
-        # n_hidden = int((n_hidden // 5) * 5)
-        self.n_hidden = n_hidden
-        self.num_gnn_layers = num_gnn_layers
-        self.edge_updates = edge_updates
-        self.final_dropout = final_dropout
-        self.edge_dim = edge_dim
-
-        self.encoder = encoder
-
-        aggregators = ['mean', 'min', 'max', 'std']
-        scalers = ['identity', 'amplification', 'attenuation']
-
-        self.node_emb = nn.Linear(num_features, n_hidden)
-        self.edge_emb = nn.Linear(edge_dim, n_hidden)
-
-        self.convs = nn.ModuleList()
-        self.emlps = nn.ModuleList()
-        self.batch_norms = nn.ModuleList()
-        for _ in range(self.num_gnn_layers):
-            conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
-                           aggregators=aggregators, scalers=scalers, deg=deg,
-                           edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
-                           divide_input=False)
-            if self.edge_updates: self.emlps.append(nn.Sequential(
-                nn.Linear(3 * self.n_hidden, self.n_hidden),
-                nn.ReLU(),
-                nn.Linear(self.n_hidden, self.n_hidden),
-            ))
-            self.convs.append(conv)
-            self.batch_norms.append(BatchNorm(n_hidden))
-
-        # self.mlp = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(self.final_dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(self.final_dropout),
-        #                       Linear(25, n_classes))
-        self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, dropout=final_dropout)
-        logger.info(f"decoder n_classes: {n_classes}, channels: {n_hidden}, dropout: {final_dropout}")
-
-    # def forward(self, x, edge_index, edge_attr, target_edge_index, target_edge_attr):
-    #     x = self.node_emb(x)
-    #     #edge_attr, _ = self.encoder(edge_attr)
-    #     #edge_attr = edge_attr.view(-1, self.edge_dim) 
-    #     edge_attr = self.edge_emb(edge_attr)
-
-    #     # target_edge_attr, _ = self.encoder(target_edge_attr)
-    #     # target_edge_attr = target_edge_attr.view(-1, self.edge_dim) 
-    #     target_edge_attr = self.edge_emb(target_edge_attr)
-
-    #     for i in range(self.num_gnn_layers):
-    #         x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
-    #         if self.edge_updates: 
-    #             src, dst = edge_index
-    #             edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
-
-    #     return target_edge_attr, x
-    
-        
-    def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
-        x = self.node_emb(x)
-        edge_attr = self.edge_emb(edge_attr)
-        pos_edge_attr = self.edge_emb(pos_edge_attr)
-        neg_edge_attr = self.edge_emb(neg_edge_attr)
-
-        for i in range(self.num_gnn_layers):
-            x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
-            if self.edge_updates: 
-                src, dst = edge_index
-                edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
-
-        # return self.mlp(out)
-        return x, pos_edge_attr, neg_edge_attr
-        #return self.decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-    
-    def loss_fn(self, input1, input2):
-        # input 1 is pos_preds and input_2 is neg_preds
-        return -torch.log(input1 + 1e-15).mean() - torch.log(1 - input2 + 1e-15).mean()
 

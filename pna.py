@@ -16,6 +16,7 @@ from torch_frame.nn import (
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 from torch_frame import NAStrategy
 from torch_frame import TensorFrame
+from torch_frame.data.stats import StatType
 
 from torch_geometric.utils import degree
 
@@ -23,7 +24,7 @@ from src.datasets import IBMTransactionsAML
 from src.nn.gnn import PNA
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
-from src.nn.weighting.MoCo import MoCoLoss
+from src.nn.gnn.decoder import LinkPredHead
 
 from tqdm import tqdm
 import wandb
@@ -109,7 +110,7 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-fix", 
-    name=f"PNA,lp",
+    name=f"PNA",
     # group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
@@ -117,13 +118,8 @@ run = wandb.init(
 )
 
 dataset = IBMTransactionsAML(
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain={PretrainType.LINK_PRED},
     mask_type="replace",
     split_type=split_type, 
@@ -133,19 +129,6 @@ dataset = IBMTransactionsAML(
 dataset.materialize()
 dataset.df.head(5)
 train_dataset, val_dataset, test_dataset = dataset.split()
-
-edge_index = dataset.train_graph.edge_index
-num_nodes = dataset.train_graph.num_nodes
-
-# Compute the in-degree for each node
-in_degrees = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
-
-# Compute the maximum in-degree
-max_in_degree = int(in_degrees.max())
-
-# Create a histogram tensor for in-degrees
-in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
-in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
 
 # %%
 def seed_worker(worker_id):
@@ -169,56 +152,7 @@ num_columns = num_numerical + num_categorical + 1
 logger.info(f"num_numerical: {num_numerical}")
 logger.info(f"num_categorical: {num_categorical}")
 logger.info(f"num_columns: {num_columns}")
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(),
-}
-encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=dataset.col_stats,
-            col_names_dict=dataset.tensor_frame.col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-).to(device)
-ssloss = SSLoss(device, num_numerical)
-ssmetric = SSMetric(device)
 
-model = PNA(
-    num_features=1, 
-    num_gnn_layers=num_layers, 
-    edge_dim=train_dataset.tensor_frame.num_cols*channels, 
-    n_classes=1, 
-    deg=in_degree_histogram,
-    edge_updates=True,
-)
-model = torch.compile(model, dynamic=True) if compile else model
-model.to(device)
-
-def mcm_inputs(tf: TensorFrame, tensor_frame_masked):
-    batch_size = len(tf.y)
-    edges = tf.y[:,-3:]
-    khop_source, khop_destination, idx = dataset_masked.sample_neighbors(edges, 'train')
-
-    edge_attr = tensor_frame_masked.__getitem__(idx)
-
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0]
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
-
-    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-
-    drop_edge_ind = torch.tensor([x for x in range(batch_size)])
-    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
-    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    input_edge_index = edge_index[:, ~mask]
-    input_edge_attr  = edge_attr[~mask]
-    target_edge_index = edge_index[:, mask]
-    target_edge_attr  = edge_attr[mask]
-    return node_feats.to(device), input_edge_index.to(device), input_edge_attr.to(device), target_edge_index.to(device), target_edge_attr.to(device)  
-    
 def lp_inputs(tf: TensorFrame, tensor_frame):
     
     edges = tf.y[:,-3:]
@@ -407,16 +341,42 @@ def eval_lp(loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> flo
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
-learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) + sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+stype_encoder_dict = {
+    stype.categorical: EmbeddingEncoder(),
+    stype.numerical: LinearEncoder(),
+    stype.timestamp: TimestampEncoder(),
+}
+encoder = StypeWiseFeatureEncoder(
+            out_channels=channels,
+            col_stats=dataset.col_stats,
+            col_names_dict=dataset.tensor_frame.col_names_dict,
+            stype_encoder_dict=stype_encoder_dict,
+).to(device)
+ssloss = SSLoss(device, num_numerical)
+ssmetric = SSMetric(device)
+
+edge_index = dataset.train_graph.edge_index
+num_nodes = dataset.train_graph.num_nodes
+in_degrees = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
+max_in_degree = int(in_degrees.max())
+in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+model = PNA(
+    num_features=1, 
+    num_gnn_layers=num_layers, 
+    edge_dim=train_dataset.tensor_frame.num_cols*channels, 
+    n_classes=1, 
+    deg=in_degree_histogram,
+    edge_updates=True,
+)
+model = torch.compile(model, dynamic=True) if compile else model
+model.to(device)
+num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
+lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
+
+learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) + sum(p.numel() for p in encoder.parameters() if p.requires_grad) + sum(p.numel() for p in lp_decoder.parameters() if p.requires_grad)
 logger.info(f"learnable_params: {learnable_params}")
 wandb.log({"learnable_params": learnable_params})
-
-from src.nn.decoder import MCMHead
-from src.nn.gnn.decoder import LinkPredHead
-from torch_frame.data.stats import StatType
-num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
-mcm_decoder = MCMHead(channels, num_numerical, num_categorical).to(device)
-lp_decoder = LinkPredHead(n_hidden=channels, dropout=dropout).to(device)
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [

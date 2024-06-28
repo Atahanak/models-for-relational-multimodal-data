@@ -76,7 +76,7 @@ class PNA(torch.nn.Module):
                 n_hidden=128, edge_updates=True,
                 edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None):
         super().__init__()
-        n_hidden = int((n_hidden // 5) * 5)
+        #n_hidden = int((n_hidden // 5) * 5)
         self.n_hidden = n_hidden
         self.num_gnn_layers = num_gnn_layers
         self.edge_updates = edge_updates

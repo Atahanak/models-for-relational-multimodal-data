@@ -16,21 +16,22 @@ from torch_frame.nn import (
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 from torch_frame import NAStrategy
 from torch_frame import TensorFrame
+from torch_frame.data.stats import StatType
 
 from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
-from src.nn.models import New, PNA
-#from src.nn.gnn import PNA
+from src.nn.models import New
+from src.nn.decoder import MCMHead
+from src.nn.gnn.decoder import LinkPredHead
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
 from src.nn.weighting.MoCo import MoCoLoss
 
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import wandb
 
 import logging
-torch.set_num_threads(8)
 # Configure logging
 logging.basicConfig(
     level=logging.DEBUG,  # Set the logging level
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 import sys
 
 torch.set_float32_matmul_precision('high')
+torch.set_num_threads(8)
 
 # %%
 seed = 42
@@ -110,7 +112,7 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-fix", 
-    name=f"original-eemb-4tab,lp",
+    name=f"edge_embedding=full+cls,lp",
     #group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
@@ -118,13 +120,8 @@ run = wandb.init(
 )
 
 # dataset_masked = IBMTransactionsAML(
-#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-#     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-#     #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
-#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-#     root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-#     #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
-#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    # root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
 #     pretrain={PretrainType.MASK, PretrainType.LINK_PRED},
 #     mask_type="replace",
 #     split_type=split_type, 
@@ -144,13 +141,8 @@ run = wandb.init(
 # num_nodes = dataset_masked.train_graph.num_nodes
 
 dataset = IBMTransactionsAML(
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
-    #root='/home/takyildiz/cse3000/data/Over-Sampled_Tiny_Trans-c.csv', 
-    # root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    # root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/home/dragomir/Downloads/dummy-100k-random-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain={PretrainType.LINK_PRED},
     mask_type="replace",
     split_type=split_type, 
@@ -161,20 +153,6 @@ dataset.materialize()
 dataset.df.head(5)
 train_dataset, val_dataset, test_dataset = dataset.split()
 
-edge_index = dataset.train_graph.edge_index
-num_nodes = dataset.train_graph.num_nodes
-
-# Compute the in-degree for each node
-in_degrees = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
-
-# Compute the maximum in-degree
-max_in_degree = int(in_degrees.max())
-
-# Create a histogram tensor for in-degrees
-in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
-in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
-
-# %%
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
@@ -203,51 +181,6 @@ num_columns = num_numerical + num_categorical + 1
 logger.info(f"num_numerical: {num_numerical}")
 logger.info(f"num_categorical: {num_categorical}")
 logger.info(f"num_columns: {num_columns}")
-
-ssloss = SSLoss(device, num_numerical)
-ssmetric = SSMetric(device)
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(),
-}
-encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=dataset.col_stats,
-            col_names_dict=dataset.tensor_frame.col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-).to(device)
-model = New(
-    channels=channels,
-    out_channels=None,
-    col_stats=dataset.col_stats,
-    col_names_dict=dataset.tensor_frame.col_names_dict,
-    edge_dim=channels*dataset.tensor_frame.num_cols,
-    num_layers=num_layers, 
-    dropout=dropout,
-    pretrain=True,
-    deg=in_degree_histogram
-)
-# model = PNA(
-#     num_features=1, 
-#     num_gnn_layers=num_layers, 
-#     edge_dim=train_dataset.tensor_frame.num_cols*channels, 
-#     n_classes=1, 
-#     deg=in_degree_histogram,
-#     edge_updates=True,
-#     encoder=StypeWiseFeatureEncoder(
-#         out_channels=channels,
-#         col_stats=dataset.col_stats,
-#         col_names_dict=dataset.tensor_frame.col_names_dict,
-#         stype_encoder_dict={
-#             stype.categorical: EmbeddingEncoder(),
-#             stype.numerical: LinearEncoder(),
-#             stype.timestamp: TimestampEncoder(),
-#         },
-#     )
-# )
-model = torch.compile(model, dynamic=True) if compile else model
-model.to(device)
 
 def mcm_inputs(tf: TensorFrame, tensor_frame_masked):
     batch_size = len(tf.y)
@@ -595,19 +528,53 @@ def eval_lp(loader: DataLoader, model, decoder, dataset_name) -> float:
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
-#mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
-#mocoloss = MoCoLoss(model, 3, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
-learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-logger.info(f"learnable_params: {learnable_params}")
-wandb.log({"learnable_params": learnable_params})
-
-from src.nn.decoder import MCMHead
-from src.nn.gnn.decoder import LinkPredHead
-from torch_frame.data.stats import StatType
 num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
 mcm_decoder = MCMHead(channels, num_numerical, num_categorical).to(device)
 lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
-logger.info(f"lpdecoder n_classes: {1}, channels: {channels}, dropout: {dropout}")
+
+stype_encoder_dict = {
+    stype.categorical: EmbeddingEncoder(),
+    stype.numerical: LinearEncoder(),
+    stype.timestamp: TimestampEncoder(),
+}
+encoder = StypeWiseFeatureEncoder(
+            out_channels=channels,
+            col_stats=dataset.col_stats,
+            col_names_dict=dataset.tensor_frame.col_names_dict,
+            stype_encoder_dict=stype_encoder_dict,
+).to(device)
+
+edge_index = dataset.train_graph.edge_index
+num_nodes = dataset.train_graph.num_nodes
+in_degrees = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
+max_in_degree = int(in_degrees.max())
+in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+model = New(
+    channels=channels,
+    out_channels=None,
+    col_stats=dataset.col_stats,
+    col_names_dict=dataset.tensor_frame.col_names_dict,
+    edge_dim=channels*dataset.tensor_frame.num_cols,
+    num_layers=num_layers, 
+    dropout=dropout,
+    pretrain=True,
+    deg=in_degree_histogram
+)
+model = torch.compile(model, dynamic=True) if compile else model
+model.to(device)
+
+model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+encoder_params = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+lp_decoder_params = sum(p.numel() for p in lp_decoder.parameters() if p.requires_grad)
+mcm_decoder_params = sum(p.numel() for p in mcm_decoder.parameters() if p.requires_grad)
+logger.info(f"model_params: {model_params}")
+logger.info(f"encoder_params: {encoder_params}")
+logger.info(f"lp_decoder_params: {lp_decoder_params}")
+logger.info(f"mcm_decoder_params: {mcm_decoder_params}")
+learnable_params = model_params + encoder_params + lp_decoder_params + mcm_decoder_params
+logger.info(f"learnable_params: {learnable_params}")
+wandb.log({"learnable_params": learnable_params})
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
@@ -615,13 +582,18 @@ optimizer_grouped_parameters = [
     {'params': [p for n, p in encoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
     {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
-    # {'params': [p for n, p in mcm_decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
-    # {'params': [p for n, p in mcm_decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+    {'params': [p for n, p in mcm_decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
+    {'params': [p for n, p in mcm_decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
     {'params': [p for n, p in lp_decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
     {'params': [p for n, p in lp_decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
 ]
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
+
+ssloss = SSLoss(device, num_numerical)
+ssmetric = SSMetric(device)
+#mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
+#mocoloss = MoCoLoss(model, 3, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 
 # train_mcm = eval_mcm(train_loader_masked, model, mcm_decoder, "tr")
 #train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
