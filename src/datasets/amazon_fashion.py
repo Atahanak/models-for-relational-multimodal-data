@@ -18,7 +18,7 @@ from torch_geometric.sampler import EdgeSamplerInput
 from torch_frame.config.text_embedder import TextEmbedderConfig
 from torch_frame.config.text_tokenizer import TextTokenizerConfig
 
-from src.datasets.util.mask import PretrainType, apply_transformation, set_target_col
+from src.datasets.util.mask import PretrainType, set_target_col, create_graph, apply_mask, create_mask
 from src.datasets.util.split import apply_split
 
 class AmazonFashionDataset(torch_frame.data.Dataset):
@@ -46,8 +46,7 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
 
     def __init__(
             self, 
-            root=None, 
-            pretrain: set[PretrainType]=set(), 
+            root=None,
             split_type='random', 
             splits=[0.8, 0.1, 0.1],
             khop_neighbors=[100, 100],
@@ -57,8 +56,12 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
             col_to_text_tokenizer_cfg: dict[str, TextTokenizerConfig]
             | TextTokenizerConfig | None = None,
             nrows=None,
-            mask_type="replace"
+            mask_type="replace",
+            pretrain=True,
+            masked_dir=".cache/masked_columns"
             ):
+        if pretrain is None:
+            pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
         # Set the root to None to install/pre-process the dataset
         if root is None:
             self.retrieve_dataset()
@@ -67,7 +70,6 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
         self.root = root
         self.split_type = split_type
         self.splits = splits
-        self.pretrain = pretrain
         self.khop_neighbors = khop_neighbors
 
         if not text_stype.is_text_stype:
@@ -125,40 +127,28 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
         
         if pretrain:
             # Create mask vector
-            mask = self.create_mask(num_columns + cat_columns)
+            mask = create_mask(self.root, self.df, num_columns + cat_columns, masked_dir)
             self.df["maskable_column"] = mask
-            # Prepare for LP - this is were custom code can go before applying the transformation(s) to the data
-            if PretrainType.LINK_PRED in pretrain:
-                # Convert strings to ints
-                unique_ids = pd.concat([self.df['reviewerID'], self.df['asin']]).unique()
-                self.id_map = {original_id: i for i, original_id in enumerate(unique_ids)}
-                # Now use this map to update 'From ID' and 'To ID' in the DataFrame to use these new IDs
-                self.df['reviewerID'] = self.df['reviewerID'].map(self.id_map)
-                self.df['asin'] = self.df['asin'].map(self.id_map)
-            for transformation in pretrain:
-                col_to_stype = apply_transformation(self, "reviewerID", "asin", cat_columns, num_columns, col_to_stype, transformation, mask_type)
+            # Prepare for graph generation
+            # Convert strings to ints
+            unique_ids = pd.concat([self.df['reviewerID'], self.df['asin']]).unique()
+            self.id_map = {original_id: i for i, original_id in enumerate(unique_ids)}
+            # Now use this map to update 'From ID' and 'To ID' in the DataFrame to use these new IDs
+            self.df['reviewerID'] = self.df['reviewerID'].map(self.id_map)
+            self.df['asin'] = self.df['asin'].map(self.id_map)
+            col_to_stype = create_graph(self, col_to_stype, "reviewerID", "asin")
+
+            col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
             # Remove columns that are not needed
             self.df = self.df.drop('maskable_column', axis=1)
 
         # Define target column to predict
+        print(pretrain)
         col_to_stype = set_target_col(self, pretrain, col_to_stype, "overall")
 
         super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col,
                          col_to_text_embedder_cfg=col_to_text_embedder_cfg,
                          col_to_text_tokenizer_cfg=col_to_text_tokenizer_cfg)
-
-    
-    def create_mask(self, maskable_columns: list[str]):
-        # Generate which columns to mask and store in file for reproducibility across different runs
-        os.makedirs(".cache/masked_columns", exist_ok=True)
-        dir_masked_columns = ".cache/masked_columns/Amazon_Fashion.npy"
-        if os.path.exists(dir_masked_columns):
-            mask = np.load(dir_masked_columns)
-        else:
-            # maskable_columns = num_columns + cat_columns
-            mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
-            np.save(dir_masked_columns, mask)
-        return mask
 
     def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
         """k-hop sampling.

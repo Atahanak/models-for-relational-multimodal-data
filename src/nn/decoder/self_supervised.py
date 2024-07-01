@@ -133,15 +133,15 @@ class SelfSupervisedLPHead(Module):
 
 class MCMHead(Module):
     r"""Used for pretraining the FT-Transformer model."""
-    def __init__(self, channels: int, num_numerical: int, num_categorical: list[int]) -> None:
+    def __init__(self, channels: int, num_numerical: int, num_categorical: list[int], w: int = 1) -> None:
         super().__init__()
         self.num_decoder = Sequential(
-            LayerNorm(channels),
+            LayerNorm(w*channels),
             ReLU(),
             Linear(channels, num_numerical),
         )
         self.cat_decoder = ModuleList([Sequential(
-            LayerNorm(channels),
+            LayerNorm(w*channels),
             ReLU(),
             Linear(channels, num_classes),
         ) for num_classes in num_categorical])
@@ -156,18 +156,18 @@ class MCMHead(Module):
                 if not isinstance(n, ReLU):
                     n.reset_parameters()
 
-    def forward(self, x_cls: Tensor) -> tuple[Tensor, list[Tensor]]:
+    def forward(self, x: Tensor) -> tuple[Tensor, list[Tensor]]:
         r"""Forward pass.
 
         Args:
-            x_cls (torch.Tensor): Output of the transformer.
+            x (torch.Tensor): Features.
 
         Returns:
             tuple[torch.Tensor, list[torch.Tensor]]: Numerical and categorical
             outputs.
         """
-        num_out = self.num_decoder(x_cls)
-        cat_out = [decoder(x_cls) for decoder in self.cat_decoder]
+        num_out = self.num_decoder(x)
+        cat_out = [decoder(x) for decoder in self.cat_decoder]
         return (num_out, cat_out)
 
 

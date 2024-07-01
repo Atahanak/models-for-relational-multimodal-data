@@ -71,7 +71,7 @@ dropout = 0.5
 pretrain = {PretrainType.LINK_PRED}
 #pretrain = 'lp'
 
-testing = False
+testing = True
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {

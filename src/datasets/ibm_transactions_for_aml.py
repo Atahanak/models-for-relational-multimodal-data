@@ -2,16 +2,19 @@ import os.path
 
 import torch
 import torch_frame
-import torch_geometric
-from torch_geometric.sampler.neighbor_sampler import NeighborSampler
 from torch_geometric.sampler import EdgeSamplerInput
+from torch_frame import stype
+from torch_frame.nn import (
+    EmbeddingEncoder,
+    LinearEncoder,
+    TimestampEncoder,
+)
+from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
+
 import pandas as pd
-
-from icecream import ic
 import numpy as np
-from src.datasets.util.mask import PretrainType, apply_transformation, set_target_col
-from src.datasets.util.split import apply_split
-
+from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, create_mask
+from .util.split import apply_split
 
 class IBMTransactionsAML(torch_frame.data.Dataset):
         r"""`"Realistic Synthetic Financial Transactions for Anti-Money Laundering Models" https://arxiv.org/pdf/2306.16424.pdf`_.
@@ -34,7 +37,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100]):
+        def __init__(self, root, mask_type="replace",
+                     pretrain=None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir=".cache/masked_columns"):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -84,29 +88,29 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
 
+            col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
+
             # Apply input corruption
-            if pretrain:
+            if PretrainType.MASK in pretrain:
                 # Create mask vector
-                mask = self.create_mask(num_columns + cat_columns)
+                mask = create_mask(self.root, self.df, num_columns + cat_columns, masked_dir)
                 self.df["maskable_column"] = mask
-                for transformation in pretrain:
-                    col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
+                col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
+                # for transformation in pretrain:
+                #     col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
                 # Remove columns that are not needed
                 self.df = self.df.drop('maskable_column', axis=1)
 
             # Define target column to predict
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
-
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
         def create_mask(self, maskable_columns: list[str]):
             # Generate which columns to mask and store in file for reproducibility across different runs
-            os.makedirs("/mnt/data/.cache/masked_columns", exist_ok=True)
             dir_masked_columns = self.root + ".npy"
             if os.path.exists(dir_masked_columns):
                 mask = np.load(dir_masked_columns)
             else:
-                # maskable_columns = num_columns + cat_columns
                 mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
                 np.save(dir_masked_columns, mask)
             return mask
@@ -151,16 +155,20 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                     row.append(self.edges[v][0])
                     col.append(self.edges[v][1])
                     idx.append(v)
-                # else:
-                #     #ic(v)
-                #     pass
             khop_row = torch.tensor(row, dtype=torch.long)
             khop_col = torch.tensor(col, dtype=torch.long)
-            #else:
-            #    idx = torch.hstack((torch.tensor(idx, dtype=torch.long), out.edge)) 
-            #    khop_row = torch.hstack((torch.tensor(row, dtype=torch.long), out.row))
-            #    khop_col = torch.hstack((torch.tensor(col, dtype=torch.long), out.col))
-
-            #ic(len(khop_row), len(khop_col), len(idx))
-            #ic(self.df.loc[out.edge].iloc[0])
             return khop_row, khop_col, idx
+        
+        def get_encoder(self, channels):
+            stype_encoder_dict = {
+                stype.categorical: EmbeddingEncoder(),
+                stype.numerical: LinearEncoder(),
+                stype.timestamp: TimestampEncoder(),
+            }
+            encoder = StypeWiseFeatureEncoder(
+                        out_channels=channels,
+                        col_stats=self.col_stats,
+                        col_names_dict=self.tensor_frame.col_names_dict,
+                        stype_encoder_dict=stype_encoder_dict,
+            )
+            return encoder

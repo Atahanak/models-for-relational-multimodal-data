@@ -112,7 +112,7 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-fix", 
-    name=f"edge_embedding=full+cls,lp",
+    name=f"edge_embedding=full+cls,lol",
     #group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
@@ -448,7 +448,7 @@ def eval_mcm(loader: DataLoader, model, mcm_decoder, dataset_name) -> float:
         return {"accuracy": accuracy, "rmse": rmse}
 
 @torch.no_grad()
-def eval_lp(loader: DataLoader, model, decoder, dataset_name) -> float:
+def eval_lp(loader: DataLoader, encoder, model, decoder, dataset_name) -> float:
     encoder.eval()
     model.eval()
     decoder.eval()
@@ -588,13 +588,9 @@ optimizer_grouped_parameters = [
     {'params': [p for n, p in lp_decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
 ]
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
-scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
-
+scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr/2, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
 ssloss = SSLoss(device, num_numerical)
 ssmetric = SSMetric(device)
-#mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
-#mocoloss = MoCoLoss(model, 3, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
-
 # train_mcm = eval_mcm(train_loader_masked, model, mcm_decoder, "tr")
 #train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
 
@@ -627,7 +623,7 @@ for epoch in range(1, epochs + 1):
 
     # val_mcm = eval_mcm(val_loader_masked, model, mcm_decoder, "val")
     # logger.info(f"val_mcm: {val_mcm}")
-    val_lp = eval_lp(val_loader, model, lp_decoder, "val")
+    val_lp = eval_lp(val_loader, encoder, model, lp_decoder, "val")
     logger.info(f"val_lp: {val_lp}")
 
     # test_mcm = eval_mcm(test_loader_masked, model, mcm_decoder, "test")
@@ -643,7 +639,7 @@ for epoch in range(1, epochs + 1):
     #     torch.save(model.state_dict(), model_save_path)
     #     logger.info(f'Best RMSE model saved to {model_save_path}')
 
-    test_lp = eval_lp(test_loader, model, lp_decoder, "test")
+    test_lp = eval_lp(test_loader, encoder, model, lp_decoder, "test")
     logger.info(f"test_lp: {test_lp}")
     if test_lp['mrr'] > best_lp and not testing:
         model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
