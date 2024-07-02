@@ -138,12 +138,12 @@ class MCMHead(Module):
         self.num_decoder = Sequential(
             LayerNorm(w*channels),
             ReLU(),
-            Linear(channels, num_numerical),
+            Linear(w*channels, num_numerical),
         )
         self.cat_decoder = ModuleList([Sequential(
             LayerNorm(w*channels),
             ReLU(),
-            Linear(channels, num_classes),
+            Linear(w*channels, num_classes),
         ) for num_classes in num_categorical])
         self.reset_parameters()
     

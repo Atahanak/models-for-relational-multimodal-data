@@ -92,7 +92,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # Apply input corruption
             if PretrainType.MASK in pretrain:
                 # Create mask vector
-                mask = self.create_mask(num_columns + cat_columns, masked_dir)
+                mask = create_mask(self, num_columns + cat_columns, masked_dir)
                 self.df["maskable_column"] = mask
                 col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
                 # for transformation in pretrain:
@@ -103,16 +103,6 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # Define target column to predict
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
-
-        def create_mask(self, maskable_columns: list[str], masked_dir: str):
-            # Generate which columns to mask and store in file for reproducibility across different runs
-            dir_masked_columns = self.root + ".npy"
-            if os.path.exists(dir_masked_columns):
-                mask = np.load(dir_masked_columns)
-            else:
-                mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
-                np.save(dir_masked_columns, mask)
-            return mask
 
         def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
             """k-hop sampling.
