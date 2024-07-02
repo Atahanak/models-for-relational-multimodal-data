@@ -50,16 +50,14 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     return col_to_stype
 
 
-def create_mask(root, df, maskable_columns: list[str], masked_dir: str):
+def create_mask(self, maskable_columns: list[str], masked_dir: str):
     # Generate which columns to mask and store in file for reproducibility across different runs
-    os.makedirs(masked_dir, exist_ok=True)
-    dir_masked_columns = masked_dir + root.split("/")[-1].removesuffix(".csv") + ".npy" # get name of file in root, and remove .csv
-    print(dir_masked_columns)
+    dir_masked_columns = self.root + ".npy"
     if os.path.exists(dir_masked_columns):
         mask = np.load(dir_masked_columns)
     else:
         # maskable_columns = num_columns + cat_columns
-        mask = np.random.choice(maskable_columns, size=df.shape[0], replace=True)
+        mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
         np.save(dir_masked_columns, mask)
     return mask
 
@@ -78,9 +76,6 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.df['target'] = self.df['mask'] + self.df['link']
         col_to_stype['target'] = torch_frame.mask
         self.target_col = 'target'
-        ic(self.df['link'][0:5])
-        ic(self.df['mask'][0:5])
-        ic(self.df['target'][0:5])
         self.df = self.df.drop(columns=['link', 'mask'])
         del col_to_stype['link']
         del col_to_stype['mask']

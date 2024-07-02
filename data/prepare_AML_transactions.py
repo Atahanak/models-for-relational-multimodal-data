@@ -42,7 +42,9 @@ def main(in_path: str, out_path: str):
     for col in df.columns:
         if df[col].dtype == 'float64':
             df[col] = np.log1p(df[col])
-            ic(df[col].min(), df[col].max(), df[col].mean())
+            # take z-normalization
+            # df[col] = (df[col] - df[col].mean()) / df[col].std()
+            # ic(df[col].min(), df[col].max(), df[col].mean())
             df[col] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
 
     logger.info(f'Edge data:\n {str(df)}')

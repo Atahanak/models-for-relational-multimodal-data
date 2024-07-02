@@ -67,9 +67,8 @@ channels = 128
 num_layers = 3
 dropout = 0.5
 
-#pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
-pretrain = {PretrainType.LINK_PRED}
-#pretrain = {PretrainType.MASK}
+pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
+#pretrain = {PretrainType.LINK_PRED}
 
 testing = False
 
@@ -110,7 +109,7 @@ run = wandb.init(
     dir="/mnt/data/",
     mode="disabled" if args['testing'] else "online",
     project=f"rel-mm-fix", 
-    name=f"tabgnn,tab=3,resiresi,lp",
+    name=f"tabgnn,tab=3,resiresi,seededges,mcm",
     #group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
@@ -171,8 +170,10 @@ def mcm_inputs(tf: TensorFrame, dataset):
     drop_edge_ind = torch.tensor([x for x in range(batch_size)])
     mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
     mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    input_edge_index = edge_index[:, ~mask]
-    input_edge_attr  = edge_attr[~mask]
+    #input_edge_index = edge_index[:, ~mask]
+    #input_edge_attr  = edge_attr[~mask]
+    input_edge_index = edge_index
+    input_edge_attr  = edge_attr
     target_edge_index = edge_index[:, mask]
     target_edge_attr  = edge_attr[mask]
     return node_feats.to(device), input_edge_index.to(device), input_edge_attr.to(device), target_edge_index.to(device), target_edge_attr.to(device)  
@@ -256,20 +257,20 @@ def lp_inputs(tf: TensorFrame, tensor_frame):
     target_edge_attr = target_edge_attr.to(device)
     return node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr
 
-def train_mcm(loader, dataset, epoc: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
+def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
     loss_accum = loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index = mcm_inputs(tf, dataset)
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset)
             tf = tf.to(device)
-            input_edge_attr, _ = encoder(input_edge_attr)
+            edge_attr, _ = encoder(edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
             x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_attr)
             x_target = x[target_edge_index.T].reshape(-1, 2 * channels)#.relu()
-            x_target = torch.cat((x_target, target_edge_attr[:, 0, :]), 1)
+            x_target = torch.cat((x_target, target_edge_attr), 1)
             num_pred, cat_pred = mcm_decoder(x_target)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
@@ -299,11 +300,11 @@ def train_lp(loader, epoc: int, encoder, model, lp_decoder, optimizer, scheduler
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
             tf = tf.to(device)
-            input_edge_attr, _ = encoder(input_edge_attr)
+            edge_attr, _ = encoder(edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
-            x_gnn, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_attr)
+            x_gnn, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_attr)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr[:batch_size,:]
@@ -332,7 +333,7 @@ def train_lp(loader, epoc: int, encoder, model, lp_decoder, optimizer, scheduler
     return {'loss': loss_lp_accum / total_count} 
 
 @torch.no_grad()
-def eval_mcm(loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
+def eval_mcm(dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
     model.eval()
     total_count = 0
     accum_acc = accum_l2 = 0
@@ -340,10 +341,14 @@ def eval_mcm(loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> f
     t_n = t_c = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index = mcm_inputs(tf, tensor_frame)
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset)
             tf = tf.to(device)
-            x_tab, x_gnn = model(node_feats, edge_index, edge_attr, target_edge_index, tf)
-            num_pred, cat_pred = mcm_decoder(x_tab[:, 0, :])
+            edge_attr, _ = encoder(edge_attr)
+            target_edge_attr, _ = encoder(target_edge_attr)
+            x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_attr)
+            x_target = x[target_edge_index.T].reshape(-1, 2 * channels)#.relu()
+            x_target = torch.cat((x_target, target_edge_attr), 1)
+            num_pred, cat_pred = mcm_decoder(x_target)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
             _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
@@ -441,7 +446,7 @@ def eval_lp(loader: DataLoader, encoder, model, decoder, dataset_name) -> float:
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
 num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
-mcm_decoder = MCMHead(channels, num_numerical, num_categorical).to(device)
+mcm_decoder = MCMHead(channels, num_numerical, num_categorical, w=3).to(device)
 lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
 
 stype_encoder_dict = {
@@ -509,41 +514,41 @@ best_rmse = 2
 
 for epoch in range(1, epochs + 1):
     logger.info(f"Epoch {epoch}:")
-    # mcm_loss = train_mcm(dataset, train_loader, epoch, encoder, model, optimizer, mcm_decoder, scheduler)
-    # logger.info(f"loss_mcm: {mcm_loss}")
-    lp_loss = train_lp(train_loader, epoch, encoder, model, lp_decoder, optimizer, scheduler)
-    logger.info(f"loss_lp: {lp_loss}")
+    mcm_loss = train_mcm(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
+    logger.info(f"loss_mcm: {mcm_loss}")
+    # lp_loss = train_lp(train_loader, epoch, encoder, model, lp_decoder, optimizer, scheduler)
+    # logger.info(f"loss_lp: {lp_loss}")
 
     # tr_mcm = eval_mcm(train_loader_masked, model, mcm_decoder, "tr")
     # logger.info(f"tr_mcm: {tr_mcm}")
     # tr_lp = eval_lp(train_loader, model, lp_decoder, "tr")
     # logger.info(f"tr_lp: {tr_lp}")
 
-    # val_mcm = eval_mcm(val_loader_masked, model, mcm_decoder, "val")
-    # logger.info(f"val_mcm: {val_mcm}")
-    val_lp = eval_lp(val_loader, encoder, model, lp_decoder, "val")
-    logger.info(f"val_lp: {val_lp}")
+    val_mcm = eval_mcm(dataset, val_loader, encoder, model, mcm_decoder, "val")
+    logger.info(f"val_mcm: {val_mcm}")
+    # val_lp = eval_lp(val_loader, encoder, model, lp_decoder, "val")
+    # logger.info(f"val_lp: {val_lp}")
 
-    # test_mcm = eval_mcm(test_loader_masked, model, mcm_decoder, "test")
-    # logger.info(f"test_mcm: {test_mcm}")
-    # if best_acc < test_mcm['accuracy']:
-    #     model_save_path = os.path.join(save_dir, f'{run_id}_acc.pth')
-    #     best_acc = test_mcm['accuracy']
-    #     torch.save(model.state_dict(), model_save_path)
-    #     logger.info(f'Best ACC model saved to {model_save_path}')
-    # if best_rmse > test_mcm['rmse']:
-    #     model_save_path = os.path.join(save_dir, f'{run_id}_rmse.pth')
-    #     best_rmse = test_mcm['rmse']
-    #     torch.save(model.state_dict(), model_save_path)
-    #     logger.info(f'Best RMSE model saved to {model_save_path}')
-
-    test_lp = eval_lp(test_loader, encoder, model, lp_decoder, "test")
-    logger.info(f"test_lp: {test_lp}")
-    if test_lp['mrr'] > best_lp and not testing:
-        model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
-        best_lp = test_lp['mrr']
+    test_mcm = eval_mcm(dataset, test_loader, encoder, model, mcm_decoder, "test")
+    logger.info(f"test_mcm: {test_mcm}")
+    if best_acc < test_mcm['accuracy'] and not testing:
+        model_save_path = os.path.join(save_dir, f'{run_id}_acc.pth')
+        best_acc = test_mcm['accuracy']
         torch.save(model.state_dict(), model_save_path)
-        logger.info(f'Best MRR model saved to {model_save_path}')
+        logger.info(f'Best ACC model saved to {model_save_path}')
+    if best_rmse > test_mcm['rmse'] and not testing:
+        model_save_path = os.path.join(save_dir, f'{run_id}_rmse.pth')
+        best_rmse = test_mcm['rmse']
+        torch.save(model.state_dict(), model_save_path)
+        logger.info(f'Best RMSE model saved to {model_save_path}')
+
+    # test_lp = eval_lp(test_loader, encoder, model, lp_decoder, "test")
+    # logger.info(f"test_lp: {test_lp}")
+    # if test_lp['mrr'] > best_lp and not testing:
+    #     model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
+    #     best_lp = test_lp['mrr']
+    #     torch.save(model.state_dict(), model_save_path)
+    #     logger.info(f'Best MRR model saved to {model_save_path}')
 
 
 wandb.finish()
