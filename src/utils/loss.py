@@ -19,7 +19,7 @@ class SSLoss:
             # pred --> feature_type_num X type_num X batch_size
             if ans[1] > (self.num_numerical - 1):
                 t_c += 1
-                a = torch.tensor(int(ans[0])).to(self.device)
+                a = torch.tensor(int(ans[0]))#.to(self.device)
                 accum_c += F.cross_entropy(cat_out[int(ans[1]) - self.num_numerical][i], a)
                 del a
             else:

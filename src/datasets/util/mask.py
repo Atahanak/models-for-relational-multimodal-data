@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pandas as pd
 from enum import Enum
@@ -17,21 +19,49 @@ class PretrainType(Enum):
     LINK_PRED = 3
 
 
-def apply_transformation(self: torch_frame.data.Dataset,
-                         src_column: str, dst_column: str,
-                         cat_columns: list[str], num_columns: list[str],
-                         col_to_stype: dict[str, torch_frame.stype],
-                         transformation: PretrainType, mask_type: str) -> dict[str, torch_frame.stype]:
-    if transformation == PretrainType.MASK:
-        return apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
-    elif transformation == PretrainType.MASK_VECTOR:
-        return col_to_stype
-        # no need to do anything, as we already store all necessary information in the mask column
-        # return apply_mask_vector(self, col_to_stype)
-        # NOTE: this means that if you use MASK_VECTOR, you MUST also use MASK
-    else:
-        return apply_link_pred(self, src_column, dst_column, col_to_stype)
+def create_graph(self, col_to_stype, src_column, dst_column):
+    self.sampler = None
+    # TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
+    self.df['link'] = self.df[[src_column, dst_column]].apply(list, axis=1)
+    col_to_stype['link'] = torch_frame.relation
 
+    def append_index_to_link(row):
+        row['link'].append(float(row.name))
+        return row
+
+    self.df = self.df.apply(append_index_to_link, axis=1)
+
+    # get number of uique ids in the dataset
+    num_nodes = len(set(self.df[src_column].to_list() + self.df[dst_column].to_list()))
+
+    # init train and val graph
+    self.edges = self.df['link'].to_numpy()
+    self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
+    # self.train_edges = self.edges
+    # val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
+
+    source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
+    destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
+    ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
+    train_edge_index = torch.stack([source, destination], dim=0)
+    x = torch.arange(num_nodes)
+    self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
+    self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+    return col_to_stype
+
+
+def create_mask(root, df, maskable_columns: list[str], masked_dir: str):
+    # Generate which columns to mask and store in file for reproducibility across different runs
+    os.makedirs(masked_dir, exist_ok=True)
+    dir_masked_columns = masked_dir + root.split("/")[-1].removesuffix(".csv") + ".npy" # get name of file in root, and remove .csv
+    print(dir_masked_columns)
+    if os.path.exists(dir_masked_columns):
+        mask = np.load(dir_masked_columns)
+    else:
+        # maskable_columns = num_columns + cat_columns
+        mask = np.random.choice(maskable_columns, size=df.shape[0], replace=True)
+        np.save(dir_masked_columns, mask)
+    return mask
 
 def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
                    col_to_stype: dict[str, torch_frame.stype], supervised_col: str) -> dict[str, torch_frame.stype]:
@@ -124,49 +154,6 @@ def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_colum
     return col_to_stype
 
 
-# This can be infered by the mask column
-# def apply_mask_vector(self: torch_frame.data.Dataset,
-#                       col_to_stype: dict[str, torch_frame.stype], p_m: float = 0.4):
-#     self.df['mask_vector'] = self.df["maskable_column"]
-#     self.df['mask_vector'] = self.df['mask_vector'].apply(lambda x: [x])   # hack to allow for lists in the future
-#     col_to_stype['mask_vector'] = torch_frame.mask_vector
-#     return col_to_stype
-
-
-def apply_link_pred(self: torch_frame.data.Dataset,
-                    src_column: str, dst_column: str,
-                    col_to_stype: dict[str, torch_frame.stype]) \
-        -> dict[str, torch_frame.stype]:
-    self.sampler = None
-    # TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
-    self.df['link'] = self.df[[src_column, dst_column]].apply(list, axis=1)
-    col_to_stype['link'] = torch_frame.relation
-
-    def append_index_to_link(row):
-        row['link'].append(float(row.name))
-        return row
-
-    self.df = self.df.apply(append_index_to_link, axis=1)
-
-    # get number of uique ids in the dataset
-    num_nodes = len(set(self.df[src_column].to_list() + self.df[dst_column].to_list()))
-
-    # init train and val graph
-    self.edges = self.df['link'].to_numpy()
-    self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
-    # self.train_edges = self.edges
-    # val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
-
-    source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
-    destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
-    ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
-    train_edge_index = torch.stack([source, destination], dim=0)
-    x = torch.arange(num_nodes)
-    self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
-    self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
-    return col_to_stype
-
-
 # Randomly mask a column of each row and store original value and max index
 def _mask_column(row: pd.Series, avg_per_num_col):
     col_to_mask = row["maskable_column"]  # Choose a column randomly
@@ -188,4 +175,3 @@ def _generate_mask_vector(maskable_vector: list[str], p_m: float = None, n: int 
         return np.random.choice(maskable_vector, n, replace=False)
     else:
         return [col for col in maskable_vector if np.random.rand() < p_m]
-

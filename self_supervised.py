@@ -8,13 +8,13 @@ import re
 from typing import Optional, Tuple, Set
 
 import fire
+import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-from icecream import ic
 import wandb
 
-from transformers import get_inverse_sqrt_schedule
+from torch_frame import TensorFrame
 from torch_frame import stype
 from torch_frame.data import DataLoader
 from torch_frame.nn.encoder import (
@@ -26,11 +26,23 @@ from src.datasets import IBMTransactionsAML
 from src.nn.models.ft_transformer import FTTransformer
 from src.datasets.util.mask import PretrainType
 
+import logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set the logging level
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Specify the log message format
+    datefmt='%Y-%m-%d %H:%M:%S',  # Specify the date format
+    handlers=[
+        #logging.FileHandler('app.log'),  # Log messages to a file
+        logging.StreamHandler()  # Also output log messages to the console
+    ]
+)
+logger = logging.getLogger(__name__)
+
 torch.set_float32_matmul_precision('high')
+torch.set_num_threads(8)
 torch.autograd.set_detect_anomaly(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_numerical, num_categorical, num_columns = 0, 0, 0
-
 
 def parse_checkpoint(checkpoint: str) -> [str, int]:
     """
@@ -60,7 +72,6 @@ def parse_checkpoint(checkpoint: str) -> [str, int]:
     else:
         raise ValueError('Checkpoint file has invalid format')
 
-
 def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str], group: Optional[str]) -> object:
     """
     Initialize the Weights & Biases run for tracking and logging.
@@ -89,7 +100,6 @@ def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str],
     wandb.log({"device": str(device)})
     return run
 
-
 def parse_pretrain_args(pretrain) -> Set[PretrainType]:
     """
     Parse pretraining arguments into a set of pretraining types.
@@ -112,8 +122,7 @@ def parse_pretrain_args(pretrain) -> Set[PretrainType]:
 
     return pretrain_set
 
-
-def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], masked_dir: str) -> IBMTransactionsAML:
+def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], split_type, data_split, khop_neighbors) -> IBMTransactionsAML:
     """
     Prepare the dataset for training by loading it and initializing necessary configurations.
 
@@ -125,18 +134,20 @@ def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], masked_d
         IBMTransactionsAML: The prepared dataset.
     """
     dataset_path = dataset_path if "scratch" in dataset_path else os.getcwd() + dataset_path
-    dataset = IBMTransactionsAML(root=dataset_path, pretrain=pretrain_set, masked_dir=masked_dir)
-    ic(dataset)
+    dataset = IBMTransactionsAML(
+        root=dataset_path, 
+        pretrain=pretrain_set,
+        split_type=split_type,
+        data_split=data_split,
+        khop_neighbors=khop_neighbors,
+    )
     dataset.materialize()
     global num_numerical, num_categorical, num_columns
     num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
     num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
-    num_columns = num_numerical + num_categorical
-    dataset.df.head(5)
-
-    ic(num_numerical, num_categorical, num_columns)
+    num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp])
+    num_columns = num_numerical + num_categorical + num_t
     return dataset
-
 
 def setup_data_loaders(dataset: IBMTransactionsAML, batch_size: int) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
@@ -153,14 +164,15 @@ def setup_data_loaders(dataset: IBMTransactionsAML, batch_size: int) -> Tuple[Da
     train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False)
-    ic(len(train_loader), len(val_loader), len(test_loader))
+    logger.info(f"train_loader size: {len(train_loader)}")
+    logger.info(f"val_loader size: {len(val_loader)}")
+    logger.info(f"test_loader size: {len(test_loader)}")
     wandb.log({
         "train_loader size": len(train_loader),
         "val_loader size": len(val_loader),
         "test_loader size": len(test_loader)
     })
     return train_loader, val_loader, test_loader
-
 
 def initialize_model(dataset: IBMTransactionsAML, device: torch.device, channels: int, num_layers: int,
                      pretrain_set: Set[PretrainType], is_compile: bool, checkpoint: Optional[str]) -> torch.nn.Module:
@@ -212,8 +224,7 @@ def initialize_model(dataset: IBMTransactionsAML, device: torch.device, channels
 
     return model
 
-
-def setup_optimizer(model: torch.nn.Module, lr: float, eps: float, weight_decay: float) -> torch.optim.Optimizer:
+def setup_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: list(torch.nn.Module), lr: float, eps: float, weight_decay: float) -> torch.optim.Optimizer:
     """
     Set up the optimizer for the model training, using AdamW with specified parameters.
 
@@ -234,152 +245,234 @@ def setup_optimizer(model: torch.nn.Module, lr: float, eps: float, weight_decay:
     ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
     # scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
-    learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    ic(learnable_params)
+    model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"model_params: {model_params}")
+    encoder_params = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+    logger.info(f"encoder_params: {encoder_params}")
+    learnable_params = model_params + encoder_params
+    for name, decoder in decoders:
+        decoder_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
+        logger.info(f"{name}_params: {decoder_params}")
+        learnable_params += decoder_params
+    logger.info(f"learnable_params: {learnable_params}")
     wandb.log({"learnable_params": learnable_params})
     return optimizer
 
+def lp_inputs(tf: TensorFrame, dataset, num_neg_samples):
+    
+    edges = tf.y[:,-3:]
+    batch_size = len(edges)
+    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
 
-def train(model: torch.nn.Module, train_loader: DataLoader, optimizer: torch.optim.Optimizer, epoch: int) -> float:
-    """
-    Train the model for one epoch using the provided data loader and optimizer.
+    edge_attr = dataset.tensor_frame.__getitem__(idx)
 
-    Args:
-        model (torch.nn.Module): The model to train.
-        train_loader (DataLoader): The DataLoader providing training data.
-        optimizer (torch.optim.Optimizer): The optimizer to use.
-        epoch (int): The current epoch number.
+    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+    num_nodes = nodes.shape[0]
+    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
 
-    Returns:
-        float: The average training loss for the epoch.
-    """
+    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+
+    drop_edge_ind = torch.tensor([x for x in range(int(batch_size))])
+    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
+    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
+    input_edge_index = edge_index[:, ~mask]
+    input_edge_attr  = edge_attr[~mask]
+
+    pos_edge_index = edge_index[:, mask]
+    pos_edge_attr  = edge_attr[mask]
+
+    # generate/sample negative edges
+    neg_edges = []
+    target_dict = pos_edge_attr.feat_dict
+    for key, value in pos_edge_attr.feat_dict.items():
+        attr = []
+        # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
+        for r in value:
+            if key == stype.timestamp:
+                attr.append(r.repeat(num_neg_samples, 1, 1))
+            else:
+                attr.append(r.repeat(num_neg_samples, 1))
+        target_dict[key] = torch.cat([target_dict[key], torch.cat(attr, dim=0)], dim=0)
+    target_edge_attr = TensorFrame(target_dict, pos_edge_attr.col_names_dict)
+
+    nodeset = set(range(edge_index.max()+1))
+    for i, edge in enumerate(pos_edge_index.t()):
+        src, dst = edge[0], edge[1]
+
+        # Chose negative examples in a smart way
+        unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
+        unavail_nodes = torch.unique(edge_index[:, unavail_mask])
+        unavail_nodes = set(unavail_nodes.tolist())
+        avail_nodes = nodeset - unavail_nodes
+        avail_nodes = torch.tensor(list(avail_nodes))
+        # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
+        indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
+        neg_nodes = avail_nodes[indices]
+        
+        # Generate num_neg_samples/2 negative edges with the same source but different destinations
+        num_neg_samples_half = int(num_neg_samples/2)
+        neg_dsts = neg_nodes[:num_neg_samples_half]  # Selecting num_neg_samples/2 random destination nodes for the source
+        neg_edges_src = torch.stack([src.repeat(num_neg_samples_half), neg_dsts], dim=0)
+        
+        # Generate num_neg_samples/2 negative edges with the same destination but different sources
+        neg_srcs = neg_nodes[num_neg_samples_half:]  # Selecting num_neg_samples/2 random source nodes for the destination
+        neg_edges_dst = torch.stack([neg_srcs, dst.repeat(num_neg_samples_half)], dim=0)
+
+        # Add these negative edges to the list
+        neg_edges.append(neg_edges_src)
+        neg_edges.append(neg_edges_dst)
+    
+    input_edge_index = input_edge_index.to(device)
+    input_edge_attr = input_edge_attr.to(device)
+    #pos_edge_index = pos_edge_index.to(device)
+    #pos_edge_attr = pos_edge_attr.to(device)
+    node_feats = node_feats.to(device)
+    if len(neg_edges) > 0:
+        #neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
+        neg_edge_index = torch.cat(neg_edges, dim=1)
+    target_edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1).to(device)
+    target_edge_attr = target_edge_attr.to(device)
+    return node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr
+
+def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, scheduler) -> float:
+    encoder.train()
     model.train()
-    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
+    lp_decoder.train()
+    total_count = 0
+    loss_lp_accum = 0
 
-    with tqdm(train_loader, desc=f'Epoch {epoch}') as t:
+    with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
+            batch_size = len(tf.y)
+            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
             tf = tf.to(device)
-            pred = model(tf)
-            loss, loss_c, loss_n = calc_loss(pred, tf.y)
+            input_edge_attr, _ = encoder(input_edge_attr)
+            # input_edge_attr = input_edge_attr.view(-1, num_columns * channels) 
+            target_edge_attr, _ = encoder(target_edge_attr)
+            # target_edge_attr = target_edge_attr.view(-1, num_columns * channels) 
+            x_tab, x_gnn = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr) #, True)
+            pos_edge_index = target_edge_index[:, :batch_size]
+            neg_edge_index = target_edge_index[:, batch_size:]
+            # pos_edge_attr = x_tab[:batch_size,0,:]
+            # neg_edge_attr = x_tab[batch_size:,0,:]
+            pos_edge_attr = x_tab[:batch_size,:]
+            neg_edge_attr = x_tab[batch_size:,:]
+
+            # pos_edge_index = target_edge_index[:, :batch_size]
+            # neg_edge_index = target_edge_index[:, batch_size:]
+            # pos_edge_attr = target_edge_attr[:batch_size,:]
+            # pos_edge_attr, _ = encoder(pos_edge_attr)
+            # pos_edge_attr = pos_edge_attr.view(-1, num_columns * channels) 
+            # neg_edge_attr = target_edge_attr[batch_size:,:]
+            # neg_edge_attr, _ = encoder(neg_edge_attr)
+            # neg_edge_attr = neg_edge_attr.view(-1, num_columns * channels) 
+            # input_edge_attr, _ = encoder(input_edge_attr)
+            # input_edge_attr = input_edge_attr.view(-1, num_columns * channels) 
+
+            # pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+
+            #x_gnn, pos_edge_attr, neg_edge_attr = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) #, True)
+            pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+
             optimizer.zero_grad()
-            loss.backward()
+            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            link_loss.backward()
             optimizer.step()
 
-            loss_accum += loss.item() * len(tf.y)
-            loss_c_accum += loss_c[0].item()
-            loss_n_accum += loss_n[0].item()
             total_count += len(tf.y)
-            t_c += loss_c[1]
-            t_n += loss_n[1]
-            t.set_postfix(loss=f'{loss_accum / total_count:.4f}',
-                          loss_c=f'{loss_c_accum / t_c:.4f}',
-                          loss_n=f'{loss_n_accum / t_n:.4f}')
-            wandb.log({"train_loss_mcm": loss_accum / total_count,
-                       "train_loss_c": loss_c_accum / t_c,
-                       "train_loss_n": loss_n_accum / t_n,
-                       "epoch": epoch})
-    return ((loss_c_accum / t_c) * (num_categorical / num_columns)) + (
-            (loss_n_accum / t_n) * (num_numerical / num_columns))
-
+            loss_lp_accum += link_loss.item() * len(tf.y)
+            t.set_postfix(loss_lp=f'{loss_lp_accum/total_count:.4f}')
+            wandb.log({"train_loss_lp": loss_lp_accum/total_count})
+    return {'loss': loss_lp_accum / total_count} 
 
 @torch.no_grad()
-def test(model: torch.nn.Module, test_loader: DataLoader, dataset_name: str, epoch: int) -> Tuple[float, float]:
-    """
-    Evaluate the model using the provided data loader and log performance metrics to wandb.
-
-    Args:
-        model (torch.nn.Module): The model to evaluate.
-        test_loader (DataLoader): The DataLoader providing test data.
-        dataset_name (str): The name of the dataset to log as part of the metrics.
-        epoch (int): The current epoch number for logging purposes.
-
-    Returns:
-        Tuple[float, float]: Tuple containing RMSE (root mean squared error) and accuracy.
-    """
+def eval_lp(dataset, loader: DataLoader, encoder, model, decoder, dataset_name, num_neg_samples) -> float:
+    encoder.eval()
     model.eval()
-    accum_acc = accum_l2 = 0
-    loss_c_accum = loss_n_accum = 0
-    t_n = t_c = 0
-    with tqdm(test_loader, desc='Evaluating') as t:
+    decoder.eval()
+    mrrs = []
+    hits1 = []
+    hits2 = []
+    hits5 = []
+    hits10 = []
+    loss_accum = 0
+    total_count = 0
+    loss_accum = loss_lp_accum = total_count = 0
+    with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
+            batch_size = len(tf.y)
+            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
             tf = tf.to(device)
-            pred = model(tf)
-            _, loss_c, loss_n = calc_loss(pred, tf.y)
-            loss_c_accum += loss_c[0].item()
-            loss_n_accum += loss_n[0].item()
-            t_c += loss_c[1]
-            t_n += loss_n[1]
-            for i, ans in enumerate(tf.y):
-                # ans --> [val, idx]
-                # pred --> feature_type_num X type_num X batch_size
-                if ans[1] > (num_numerical - 1):
-                    accum_acc += (pred[1][int(ans[1]) - num_numerical][i].argmax() == int(ans[0]))
-                else:
-                    accum_l2 += torch.square(ans[0] - pred[0][i][int(ans[1])])  #rmse
+            input_edge_attr, _ = encoder(input_edge_attr)
+            # input_edge_attr = input_edge_attr.view(-1, num_columns * channels) 
+            target_edge_attr, _ = encoder(target_edge_attr)
+            # target_edge_attr = target_edge_attr.view(-1, num_columns * channels) 
+            x_tab, x_gnn = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr) #, True)
+            pos_edge_index = target_edge_index[:, :batch_size]
+            neg_edge_index = target_edge_index[:, batch_size:]
+            # pos_edge_attr = x_tab[:batch_size,0,:]
+            # neg_edge_attr = x_tab[batch_size:,0,:]
+            pos_edge_attr = x_tab[:batch_size,:]
+            neg_edge_attr = x_tab[batch_size:,:]
 
-            # loss numerical
-            loss_c_mcm = (((loss_c_accum / t_c) * (num_categorical / num_columns)) +
-                          ((loss_n_accum / t_n) * (num_numerical / num_columns)))
-            loss_c = loss_c_accum / t_c
-            loss_n = loss_n_accum / t_n
-            wandb.log({f"{dataset_name}_loss_mcm": loss_c_mcm,
-                       f"{dataset_name}_loss_c": loss_c,
-                       f"{dataset_name}_loss_n": loss_n,
-                       "epoch": epoch})
+            # pos_edge_index = target_edge_index[:, :batch_size]
+            # neg_edge_index = target_edge_index[:, batch_size:]
+            # pos_edge_attr = target_edge_attr[:batch_size,:]
+            # pos_edge_attr, _ = encoder(pos_edge_attr)
+            # pos_edge_attr = pos_edge_attr.view(-1, num_columns * channels) 
+            # neg_edge_attr = target_edge_attr[batch_size:,:]
+            # neg_edge_attr, _ = encoder(neg_edge_attr)
+            # neg_edge_attr = neg_edge_attr.view(-1, num_columns * channels) 
+            # input_edge_attr, _ = encoder(input_edge_attr)
+            # input_edge_attr = input_edge_attr.view(-1, num_columns * channels)
 
-            acc = accum_acc / t_c
-            rmse = torch.sqrt(accum_l2 / t_n)
-            loss = (loss_c_accum / t_c) + (loss_n_accum / t_n)
-            t.set_postfix(accuracy=f'{acc:.4f}',
-                          rmse=f'{rmse:.4f}',
-                          loss=f'{loss:.4f}',
-                          loss_c_mcm=f'{loss_c_mcm:.4f}',
-                          loss_c=f'{loss_c:.4f}',
-                          loss_n=f'{loss_n:.4f}')
+            # pos_pred, neg_pred = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 
-        wandb.log({f"{dataset_name}_accuracy": accum_acc / t_c,
-                   f"{dataset_name}_rmse": rmse,
-                   f"{dataset_name}_loss": loss,
-                   f"{dataset_name}_loss_c_mcm": loss_c_mcm,
-                   f"{dataset_name}_loss_c": loss_c_accum / t_c,
-                   f"{dataset_name}_loss_n": loss_n_accum / t_n,
-                   "epoch": epoch})
-        del tf
-        del pred
-        return [rmse, acc]
+            # x_gnn, pos_edge_attr, neg_edge_attr = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr) #, True)
+            pos_pred, neg_pred = decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            loss = ssloss.lp_loss(pos_pred, neg_pred)
+            
+            loss_lp_accum += loss * len(pos_pred)
+            loss_accum += float(loss) * len(pos_pred)
+            total_count += len(pos_pred)
+            mrr_score, hits = ssmetric.mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
+            mrrs.append(mrr_score)
+            hits1.append(hits['hits@1'])
+            hits2.append(hits['hits@2'])
+            hits5.append(hits['hits@5'])
+            hits10.append(hits['hits@10'])
+            t.set_postfix(
+                mrr=f'{np.mean(mrrs):.4f}',
+                hits1=f'{np.mean(hits1):.4f}',
+                hits2=f'{np.mean(hits2):.4f}',
+                hits5=f'{np.mean(hits5):.4f}',
+                hits10=f'{np.mean(hits10):.4f}',
+                loss_lp = f'{loss_lp_accum/total_count:.4f}',
+            )
+            wandb.log({
+                f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+            })
+        mrr_score = np.mean(mrrs)
+        hits1 = np.mean(hits1)
+        hits2 = np.mean(hits2)
+        hits5 = np.mean(hits5)
+        hits10 = np.mean(hits10)
+        wandb.log({
+            f"{dataset_name}_mrr": mrr_score,
+            f"{dataset_name}_hits@1": hits1,
+            f"{dataset_name}_hits@2": hits2,
+            f"{dataset_name}_hits@5": hits5,
+            f"{dataset_name}_hits@10": hits10,
+        })
+        return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
-
-def calc_loss(pred: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, Tuple[float, int], Tuple[float, int]]:
-    """
-    Calculate loss for a batch of predictions and corresponding true values.
-
-    Args:
-        pred (torch.Tensor): The predictions tensor.
-        y (torch.Tensor): The true values tensor.
-
-    Returns:
-        Tuple[torch.Tensor, Tuple[float, int], Tuple[float, int]]: The computed loss, a tuple containing accumulated
-        categorical loss and count, and a tuple containing accumulated numerical loss and count.
-    """
-    accum_n = accum_c = t_n = t_c = 0
-    for i, ans in enumerate(y):
-        # ans --> [val, idx]
-        # pred --> feature_type_num X type_num X batch_size
-        if ans[1] > (num_numerical - 1):
-            t_c += 1
-            a = torch.tensor(int(ans[0])).to(device)
-            accum_c += F.cross_entropy(pred[1][int(ans[1]) - num_numerical][i], a)
-            del a
-        else:
-            t_n += 1
-            accum_n += torch.square(pred[0][i][int(ans[1])] - ans[0])  #mse
-    return (accum_n / t_n) + torch.sqrt(accum_c / t_c), (accum_c, t_c), (accum_n, t_n)
-
-
-def main(checkpoint="None", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_name="self-supervised",
+def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name", save_dir="/path/to/save/",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
-         data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"],
-         is_compile=False, testing=False, wand_dir="/mnt/data/", group="testing", masked_dir="/tmp/.cache/masked_columns", save_dir="saved_models/self-supervised"):
+         data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"], khop_neighbors=[100, 100], num_neg_samples=64,
+         is_compile=False, testing=True, wand_dir="/path/to/wandb", group=""):
     args = {
         "testing": testing,
         "seed": seed,
@@ -408,17 +501,16 @@ def main(checkpoint="None", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_n
     init_wandb(args, run_name, wand_dir, run_id, group)
 
     pretrain_set = parse_pretrain_args(pretrain)
-    print("preparing dataset")
-    dataset = prepare_dataset(dataset, pretrain_set, masked_dir)
-    print("setting up dataloaders")
+    dataset = prepare_dataset(dataset, pretrain_set, split_type, data_split, khop_neighbors)
     train_loader, val_loader, test_loader = setup_data_loaders(dataset, batch_size)
 
-    print("initializing model")
+    encoder = dataset.get_encoder(channels)
     model = initialize_model(dataset, device, channels, num_layers, pretrain_set, is_compile, checkpoint)
     optimizer = setup_optimizer(model, lr, eps, weight_decay)
 
     run_id = wandb.run.id
     os.makedirs(save_dir, exist_ok=True)
+    best_lp = 0
 
     if checkpoint_epoch is not None:
         start_epoch = checkpoint_epoch + 1
@@ -428,21 +520,24 @@ def main(checkpoint="None", dataset="/data/Over-Sampled_Tiny_Trans-c.csv", run_n
         end_epoch = epochs + 1
 
     for epoch in range(start_epoch, end_epoch):
-        train_loss = train(model, train_loader, optimizer, epoch)
-        train_metric = test(model, train_loader, "tr", epoch)
-        val_metric = test(model, val_loader, "val", epoch)
-        test_metric = test(model, test_loader, "test", epoch)
-        ic(
-            train_loss,
-            train_metric,
-            val_metric,
-            test_metric
-        )
-        model_save_path = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch}.pth')
-        torch.save(model.state_dict(), model_save_path)
+        train_loss = train_lp(dataset, train_loader, epoch, encoder, model, lp_decoder, optimizer, epoch)
+        logger.info(f"Epoch {epoch} train loss: {train_loss['loss']}")
+        #train_metric = eval_lp(model, train_loader, "tr", epoch)
+        val_metric = eval_lp(val_loader, encoder, model, lp_decoder, "val", epoch)
+        logger.info(f"Epoch {epoch} val: {val_metric}")
+        test_metric = eval_lp(test_loader, encoder, model, lp_decoder, "test", epoch)
+        logger.info(f"Epoch {epoch} test: {test_metric}")
+        if not testing:
+            model_save_path = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch}.pth')
+            torch.save(model.state_dict(), model_save_path)
+            logger.info(f'Model saved to {model_save_path}')
+            if test_metric['mrr'] > best_lp and not testing:
+                model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
+                best_lp = test_metric['mrr']
+                torch.save(model.state_dict(), model_save_path)
+                logger.info(f'Best MRR model saved to {model_save_path}')
 
     wandb.finish()
-
 
 if __name__ == "__main__":
     fire.Fire(main)
