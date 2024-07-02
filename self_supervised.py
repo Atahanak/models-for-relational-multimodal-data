@@ -491,12 +491,15 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
     }
     torch.manual_seed(args['seed'])
 
-    if checkpoint != "":
-        run_id, checkpoint_epoch = parse_checkpoint(checkpoint)
-    else:
+    if checkpoint == "None":
+        checkpoint = None
         run_id, checkpoint_epoch = None, None
+    else:
+        run_id, checkpoint_epoch = parse_checkpoint(checkpoint)
 
+    print("setting up wandb")
     init_wandb(args, run_name, wand_dir, run_id, group)
+
     pretrain_set = parse_pretrain_args(pretrain)
     dataset = prepare_dataset(dataset, pretrain_set, split_type, data_split, khop_neighbors)
     train_loader, val_loader, test_loader = setup_data_loaders(dataset, batch_size)

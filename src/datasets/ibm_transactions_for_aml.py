@@ -37,8 +37,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace",
-                     pretrain=None, split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir=".cache/masked_columns"):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -93,7 +92,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # Apply input corruption
             if PretrainType.MASK in pretrain:
                 # Create mask vector
-                mask = create_mask(self.root, self.df, num_columns + cat_columns, masked_dir)
+                mask = self.create_mask(num_columns + cat_columns, masked_dir)
                 self.df["maskable_column"] = mask
                 col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
                 # for transformation in pretrain:
@@ -105,7 +104,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
-        def create_mask(self, maskable_columns: list[str]):
+        def create_mask(self, maskable_columns: list[str], masked_dir: str):
             # Generate which columns to mask and store in file for reproducibility across different runs
             dir_masked_columns = self.root + ".npy"
             if os.path.exists(dir_masked_columns):

@@ -20,7 +20,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/self-supervised.py --dataset="/scratch/vascodegraaff/aml-data/HI-Small_Trans-c.csv" --testing=False --is_compile=True --epoch=30 --group="self_supervised" 
+srun python /home/$USER/cse3000/self_supervised.py --dataset="/scratch/vascodegraaff/aml-data/HI-Small_Trans-c.csv" --testing=False --is_compile=True --epoch=30 --group="self_supervised"
 
 conda deactivate
 
