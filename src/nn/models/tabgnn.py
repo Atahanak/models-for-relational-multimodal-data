@@ -32,6 +32,7 @@ class TABGNN(Module):
         # general parameters
         channels: int,
         num_layers: int,
+        encoder: Any,
         # PNA parameters
         deg=None,
         node_dim: int = 1,
@@ -47,7 +48,7 @@ class TABGNN(Module):
         if num_layers <= 0:
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
-        
+        self.encoder = encoder
         self.channels = channels
         self.nhidden = nhidden
         self.edge_dim = edge_dim + channels
@@ -74,24 +75,25 @@ class TABGNN(Module):
         for layer in self.gnn_backbone:
             layer.reset_parameters()
 
-    # def get_shared_params(self):
-    #     param_groups = [
-    #         self.encoder.parameters(),
-    #         [self.cls_embedding],  # Wrap single parameters in a list
-    #         self.node_emb.parameters(),
-    #         #self.edge_emb.parameters(),
-    #         self.backbone[:-1].parameters(),
-    #     ]
+    def get_shared_params(self):
+        param_groups = [
+            self.encoder.parameters(),
+            [self.cls_embedding],  # Wrap single parameters in a list
+            self.node_emb.parameters(),
+            self.edge_emb.parameters(),
+            self.tabular_backbone.parameters(),
+            self.gnn_backbone.parameters(),
+        ]
         
-    #     # Flatten the param groups into a single list
-    #     flat_params = [param for group in param_groups for param in group]
+        # Flatten the param groups into a single list
+        flat_params = [param for group in param_groups for param in group]
         
-    #     return flat_params
+        return flat_params
 
-    # def zero_grad_shared_params(self):
-    #     for param in self.get_shared_params():
-    #         if param.grad is not None:
-    #             param.grad.data.zero_()
+    def zero_grad_shared_params(self):
+        for param in self.get_shared_params():
+            if param.grad is not None:
+                param.grad.data.zero_()
 
     def forward(self, x, edge_index, edge_attr, target_edge_attr) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
