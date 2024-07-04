@@ -70,7 +70,7 @@ dropout = 0.5
 pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
 #pretrain = {PretrainType.LINK_PRED}
 
-testing = True
+testing = False
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
@@ -106,10 +106,12 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 
 wandb.login()
 run = wandb.init(
-    dir="/mnt/data/",
+    #dir="/mnt/data/",
+    dir="/scratch/takyildiz/",
     mode="disabled" if args['testing'] else "online",
+    #mode="disabled" if args['testing'] else "disabled",
     project=f"rel-mm-fix", 
-    name=f"tabgnn,tab=3,resiresi,mcm,c",
+    name=f"tabgnn,tab=3,mcm,lp,moco",
     #group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
@@ -117,8 +119,8 @@ run = wandb.init(
 )
 
 dataset = IBMTransactionsAML(
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain=pretrain,
     mask_type="replace",
     split_type=split_type, 
@@ -473,7 +475,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
             optimizer.step()
             # scheduler.step()
 
-            loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss*moco_loss[1])) * len(tf.y))
+            loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
             total_count += len(tf.y)
             t_c += loss_c[1]
             t_n += loss_n[1]
@@ -512,25 +514,25 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr[:batch_size,:]
             neg_edge_attr = target_edge_attr[batch_size:,:]
-
             pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
-            x_target = x_gnn[pos_edge_index.T].reshape(-1, 2 * channels)#.relu()
-            x_target = torch.cat((x_target, pos_edge_attr), 1)
-            num_pred, cat_pred = mcm_decoder(x_target)
-            num_pred = num_pred.cpu()
-            cat_pred = [x.cpu() for x in cat_pred] 
-            loss = ssloss.lp_loss(pos_pred, neg_pred)
-            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
 
             x_target = x_gnn[pos_edge_index.T].reshape(-1, 2 * channels)#.relu()
             x_target = torch.cat((x_target, pos_edge_attr), 1)
             num_pred, cat_pred = mcm_decoder(x_target)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred] 
-            
-            loss_lp_accum += loss * len(pos_pred)
-            loss_accum += float(loss) * len(pos_pred)
-            total_count += len(pos_pred)
+
+            link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+            moco_loss = mocoloss.loss([link_loss, t_loss])
+
+            loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
+            total_count += len(tf.y)
+            t_c += loss_c[1]
+            t_n += loss_n[1]
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
+            loss_lp_accum += link_loss.item() * len(tf.y)
             mrr_score, hits = ssmetric.mrr(pos_pred, neg_pred, [1,2,5,10], num_neg_samples)
             mrrs.append(mrr_score)
             hits1.append(hits['hits@1'])
@@ -538,11 +540,6 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
             hits5.append(hits['hits@5'])
             hits10.append(hits['hits@10'])
 
-            t_c += loss_c[1]
-            t_n += loss_n[1] 
-            loss_c_accum += loss_c[0].item()
-            loss_n_accum += loss_n[0].item()
-            total_count += len(num_pred)
             for i, ans in enumerate(tf.y):
                 if ans[1] > (num_numerical-1):
                     accum_acc += (cat_pred[int(ans[1])-num_numerical][i].argmax() == int(ans[0]))
@@ -646,7 +643,8 @@ ssloss = SSLoss(device, num_numerical)
 ssmetric = SSMetric(device)
 mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 
-save_dir = '/mnt/data/.cache/saved_models'
+#save_dir = '/mnt/data/.cache/saved_models'
+save_dir = '/scratch/takyildiz/.cache/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 best_lp = 0
