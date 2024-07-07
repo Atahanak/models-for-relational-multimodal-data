@@ -45,6 +45,7 @@ logging.basicConfig(
 # Create a logger
 logger = logging.getLogger(__name__)
 import sys
+import time
 
 torch.set_float32_matmul_precision('high')
 torch.set_num_threads(4)
@@ -106,12 +107,12 @@ os.environ["PYTHONHASHSEED"] = str(seed)
 
 wandb.login()
 run = wandb.init(
-    #dir="/mnt/data/",
-    dir="/scratch/takyildiz/",
+    dir="/mnt/data/",
+    #dir="/scratch/takyildiz/",
     mode="disabled" if args['testing'] else "online",
     #mode="disabled" if args['testing'] else "disabled",
     project=f"rel-mm-fix", 
-    name=f"tabgnn,tab=3,mcm,lp,moco",
+    name=f"tabgnn,tab=3,mcm-lp",
     #group=f"new,mcm",
     entity="cse3000",
     #name=f"debug-fused",
@@ -119,8 +120,8 @@ run = wandb.init(
 )
 
 dataset = IBMTransactionsAML(
-    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain=pretrain,
     mask_type="replace",
     split_type=split_type, 
@@ -172,20 +173,19 @@ def mcm_inputs(tf: TensorFrame, dataset):
     drop_edge_ind = torch.tensor([x for x in range(batch_size)])
     mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
     mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    input_edge_index = edge_index[:, ~mask]
-    input_edge_attr  = edge_attr[~mask]
-    # input_edge_index = edge_index
-    # input_edge_attr  = edge_attr
+    # input_edge_index = edge_index[:, ~mask]
+    # input_edge_attr  = edge_attr[~mask]
+    input_edge_index = edge_index
+    input_edge_attr  = edge_attr
     target_edge_index = edge_index[:, mask]
     target_edge_attr  = edge_attr[mask]
     return node_feats.to(device), input_edge_index.to(device), input_edge_attr.to(device), target_edge_index.to(device), target_edge_attr.to(device)  
     
 def lp_inputs(tf: TensorFrame, dataset):
-    
     edges = tf.y[:,-3:]
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
-
+    
     edge_attr = dataset.tensor_frame.__getitem__(idx)
 
     nodes = torch.unique(torch.cat([khop_source, khop_destination]))
@@ -224,15 +224,40 @@ def lp_inputs(tf: TensorFrame, dataset):
     for i, edge in enumerate(pos_edge_index.t()):
         src, dst = edge[0], edge[1]
 
-        # Chose negative examples in a smart way
-        unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
-        unavail_nodes = torch.unique(edge_index[:, unavail_mask])
-        unavail_nodes = set(unavail_nodes.tolist())
-        avail_nodes = nodeset - unavail_nodes
-        avail_nodes = torch.tensor(list(avail_nodes))
-        # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
-        indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
-        neg_nodes = avail_nodes[indices]
+        # # # Chose negative examples in a smart way
+        # unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
+        # unavail_nodes = torch.unique(edge_index[:, unavail_mask])
+        # unavail_nodes = set(unavail_nodes.tolist())
+        # avail_nodes = nodeset - unavail_nodes
+        # avail_nodes = torch.tensor(list(avail_nodes))
+        # # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
+        # indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
+        # neg_nodes = avail_nodes[indices]
+        
+        # # Create a mask of unavailable nodes
+        # unavail_mask = torch.isin(edge_index.flatten(), torch.tensor([src, dst])).view(edge_index.shape).any(dim=0)
+        # # Get unique unavailable nodes
+        # unavail_nodes = torch.unique(edge_index[:, unavail_mask])
+        # # Convert to set for fast set operations
+        # unavail_nodes_set = set(unavail_nodes.tolist())
+        # # Determine available nodes by set difference
+        # avail_nodes = list(nodeset - unavail_nodes_set)
+        # # Convert available nodes back to tensor
+        # avail_nodes = torch.tensor(avail_nodes, dtype=torch.long)
+        # # Randomly select negative samples from available nodes
+        # indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
+        # neg_nodes = avail_nodes[indices]
+
+        # Create a mask of unavailable nodes
+        unavail_mask = torch.isin(edge_index.flatten(), torch.tensor([src, dst]))
+        unavail_nodes = edge_index.flatten()[unavail_mask].unique()
+        # Create a mask for all nodes
+        all_nodes = torch.arange(max(nodeset) + 1)
+        avail_mask = ~torch.isin(all_nodes, unavail_nodes)
+        # Get available nodes
+        avail_nodes = all_nodes[avail_mask]
+        # Randomly select negative samples from available nodes
+        neg_nodes = avail_nodes[torch.randint(high=len(avail_nodes), size=(num_neg_samples,))]
         
         # Generate num_neg_samples/2 negative edges with the same source but different destinations
         num_neg_samples_half = int(num_neg_samples/2)
@@ -289,7 +314,7 @@ def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            wandb.log({"epoch": epoc, "train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
     return {'loss': loss_accum / total_count}
 
 def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, scheduler) -> float:
@@ -321,7 +346,7 @@ def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, 
             total_count += len(tf.y)
             loss_lp_accum += link_loss.item() * len(tf.y)
             t.set_postfix(loss_lp=f'{loss_lp_accum/total_count:.4f}')
-            wandb.log({"train_loss_lp": loss_lp_accum/total_count})
+            wandb.log({"epoch": epoc, "train_loss_lp": loss_lp_accum/total_count})
             #wandb.log({"lr": scheduler.get_last_lr()[0]})
     return {'loss': loss_lp_accum / total_count} 
 
@@ -447,12 +472,10 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
     mcm_decoder.train()
     loss_accum = total_count = 0
     loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
-
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
             node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-            tf = tf.to(device)
             input_edge_attr, _ = encoder(input_edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
             x_gnn, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_attr)
@@ -471,22 +494,27 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
             optimizer.zero_grad()
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            moco_loss = mocoloss.loss([link_loss, t_loss])
+            loss = link_loss + t_loss
+            loss.backward()
+            #moco_loss = mocoloss.loss([link_loss, t_loss])
             optimizer.step()
             # scheduler.step()
 
-            loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
+            #loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
+            loss_accum += ((link_loss.item()+(t_loss.item())) * len(tf.y))
             total_count += len(tf.y)
             t_c += loss_c[1]
             t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(tf.y)
-            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}', moco_loss=f'{moco_loss[0]:.4f},{moco_loss[1]:.4f}')
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+            #t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}', moco_loss=f'{moco_loss[0]:.4f},{moco_loss[1]:.4f}')
+            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
+            wandb.log({"epoch": epoc, "train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
             #wandb.log({"lr": scheduler.get_last_lr()[0]})
     return {'loss': loss_accum / total_count} 
 
+@torch.no_grad()
 def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name):
     encoder.eval()
     model.eval()
@@ -506,7 +534,6 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
         for tf in t:
             batch_size = len(tf.y)
             node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-            tf = tf.to(device)
             input_edge_attr, _ = encoder(input_edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
             x_gnn, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_attr)
@@ -524,9 +551,10 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
 
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
-            moco_loss = mocoloss.loss([link_loss, t_loss])
+            # moco_loss = mocoloss.loss([link_loss, t_loss])
 
-            loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
+            #loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
+            loss_accum += ((link_loss.item()+(t_loss.item())) * len(tf.y))
             total_count += len(tf.y)
             t_c += loss_c[1]
             t_n += loss_n[1]
@@ -643,8 +671,8 @@ ssloss = SSLoss(device, num_numerical)
 ssmetric = SSMetric(device)
 mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
 
-#save_dir = '/mnt/data/.cache/saved_models'
-save_dir = '/scratch/takyildiz/.cache/saved_models'
+save_dir = '/mnt/data/.cache/saved_models'
+#save_dir = '/scratch/takyildiz/.cache/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 best_lp = 0
@@ -667,12 +695,12 @@ for epoch in range(1, epochs + 1):
 
     val_lp, val_mcm = eval(dataset, val_loader, encoder, model, lp_decoder, mcm_decoder, "val")
     logger.info(f"val_mcm: {val_mcm}")
-    logger.info(f"val_mcm: {val_mcm}")
+    logger.info(f"val_lp: {val_lp}")
 
     # val_mcm = eval_mcm(dataset, val_loader, encoder, model, mcm_decoder, "val")
     # logger.info(f"val_mcm: {val_mcm}")
     # val_lp = eval_lp(dataset, val_loader, encoder, model, lp_decoder, "val")
-    # logger.info(f"val_mcm: {val_mcm}")
+    # logger.info(f"val_lp: {val_lp}")
 
     test_lp, test_mcm = eval(dataset, test_loader, encoder, model, lp_decoder, mcm_decoder, "test")
     logger.info(f"test_mcm: {test_mcm}")
@@ -680,24 +708,24 @@ for epoch in range(1, epochs + 1):
 
     # test_mcm = eval_mcm(dataset, test_loader, encoder, model, mcm_decoder, "test")
     # logger.info(f"test_mcm: {test_mcm}")
-    if best_acc < test_mcm['accuracy'] and not testing:
-        model_save_path = os.path.join(save_dir, f'{run_id}_acc.pth')
-        best_acc = test_mcm['accuracy']
-        torch.save(model.state_dict(), model_save_path)
-        logger.info(f'Best ACC model saved to {model_save_path}')
-    if best_rmse > test_mcm['rmse'] and not testing:
-        model_save_path = os.path.join(save_dir, f'{run_id}_rmse.pth')
-        best_rmse = test_mcm['rmse']
-        torch.save(model.state_dict(), model_save_path)
-        logger.info(f'Best RMSE model saved to {model_save_path}')
+    # if best_acc < test_mcm['accuracy'] and not testing:
+    #     model_save_path = os.path.join(save_dir, f'{run_id}_acc.pth')
+    #     best_acc = test_mcm['accuracy']
+    #     torch.save(model.state_dict(), model_save_path)
+    #     logger.info(f'Best ACC model saved to {model_save_path}')
+    # if best_rmse > test_mcm['rmse'] and not testing:
+    #     model_save_path = os.path.join(save_dir, f'{run_id}_rmse.pth')
+    #     best_rmse = test_mcm['rmse']
+    #     torch.save(model.state_dict(), model_save_path)
+    #     logger.info(f'Best RMSE model saved to {model_save_path}')
 
     # test_lp = eval_lp(dataset, test_loader, encoder, model, lp_decoder, "test")
     # logger.info(f"test_lp: {test_lp}")
-    if test_lp['mrr'] > best_lp and not testing:
-        model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
-        best_lp = test_lp['mrr']
-        torch.save(model.state_dict(), model_save_path)
-        logger.info(f'Best MRR model saved to {model_save_path}')
+    # if test_lp['mrr'] > best_lp and not testing:
+    #     model_save_path = os.path.join(save_dir, f'{run_id}_mrr.pth')
+    #     best_lp = test_lp['mrr']
+    #     torch.save(model.state_dict(), model_save_path)
+    #     logger.info(f'Best MRR model saved to {model_save_path}')
 
 
 wandb.finish()

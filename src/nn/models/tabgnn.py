@@ -121,8 +121,10 @@ class TABGNN(Module):
         edge_attr = (edge_attr + t_edge_attr) / 2
         target_edge_attr = (target_edge_attr + t_target_edge_attr) / 2
         
+
         target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
         target_edge_attr = self.edge_emb(target_edge_attr)
+
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
@@ -159,6 +161,9 @@ class PNALayer(Module):
     def reset_parameters(self):
         self.gnn_conv.reset_parameters()
         self.gnn_norm.reset_parameters()
+        for p in self.gnn_edge_update.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
     def forward(self, x_gnn, edge_index, edge_attr):
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2

@@ -91,13 +91,9 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             # Apply input corruption
             if PretrainType.MASK in pretrain:
-                # Create mask vector
                 mask = create_mask(self, num_columns + cat_columns, masked_dir)
                 self.df["maskable_column"] = mask
                 col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
-                # for transformation in pretrain:
-                #     col_to_stype = apply_transformation(self, "From ID", "To ID", cat_columns, num_columns, col_to_stype, transformation, mask_type)
-                # Remove columns that are not needed
                 self.df = self.df.drop('maskable_column', axis=1)
 
             # Define target column to predict
@@ -124,10 +120,13 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             pd.DataFrame
                 Sampled edge data
             """
-            
-            row = [int(edge[0]) for edge in edges]
-            col = [int(edge[1]) for edge in edges]
-            idx = [int(edge[2]) for edge in edges]
+            edges = torch.tensor(edges, dtype=torch.int)  # Convert edges to a PyTorch tensor of integers
+            row = edges[:, 0]
+            col = edges[:, 1]
+            idx = edges[:, 2] 
+            # row = [int(edge[0]) for edge in edges]
+            # col = [int(edge[1]) for edge in edges]
+            # idx = [int(edge[2]) for edge in edges]
 
             input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
             out = self.sampler.sample_from_edges(input)
@@ -135,18 +134,40 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             perm = self.sampler.edge_permutation 
             e_id = perm[out.edge] if perm is not None else out.edge
 
-            edge_set = set()
-            for id in idx:
-                edge_set.add(id)
-            for _, v in enumerate(e_id.numpy()):
-                assert self.edges[v][2] == v #sanity check
-                if v not in edge_set:
-                    row.append(self.edges[v][0])
-                    col.append(self.edges[v][1])
-                    idx.append(v)
-            khop_row = torch.tensor(row, dtype=torch.long)
-            khop_col = torch.tensor(col, dtype=torch.long)
-            return khop_row, khop_col, idx
+            # edge_set = set()
+            # for id in idx:
+            #     edge_set.add(id)
+            # for _, v in enumerate(e_id.numpy()):
+            #     if v not in edge_set:
+            #         row.append(self.edges[v][0])
+            #         col.append(self.edges[v][1])
+            #         idx.append(v)
+            # khop_row = torch.tensor(row, dtype=torch.long)
+            # khop_col = torch.tensor(col, dtype=torch.long)
+            # return khop_row, khop_col, idx
+
+            # Convert idx to a tensor for fast membership checking
+            # idx_tensor = idx.long()
+
+            # Identify new edges using tensor operations
+            is_new_edge = ~torch.isin(e_id, idx)
+            new_edges = e_id[is_new_edge]
+
+            # Add new edges to the row, col, idx tensors
+            if len(new_edges) > 0:
+                # print(f'Shape new edges: {new_edges.shape}')
+
+                # print(f'Shape self.edges {self.edges.shape}')
+                # print(f'Shape self.edges[0] {self.edges[0]}')
+                # print(f'Shape self.edges[1] {self.edges[1]}')
+                # print(f'Shape self.edges[2] {self.edges[2]}')
+                # print(f'Shape self.edges[3] {type(self.edges[3])}')
+
+                row = torch.cat([row, self.edges[new_edges, 0]])
+                col = torch.cat([col, self.edges[new_edges, 1]])
+                idx = torch.cat([idx, new_edges])
+
+            return row, col, idx
         
         def get_encoder(self, channels):
             stype_encoder_dict = {

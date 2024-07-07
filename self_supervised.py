@@ -22,6 +22,7 @@ from torch_frame.nn.encoder import (
     LinearEncoder,
     TimestampEncoder,
 )
+from torch_frame.data.stats import StatType
 from src.datasets import IBMTransactionsAML
 from src.nn.models.ft_transformer import FTTransformer
 from src.datasets.util.mask import PretrainType

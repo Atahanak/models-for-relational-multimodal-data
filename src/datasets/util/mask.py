@@ -18,7 +18,6 @@ class PretrainType(Enum):
     MASK_VECTOR = 2
     LINK_PRED = 3
 
-
 def create_graph(self, col_to_stype, src_column, dst_column):
     self.sampler = None
     # TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
@@ -35,20 +34,25 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     num_nodes = len(set(self.df[src_column].to_list() + self.df[dst_column].to_list()))
 
     # init train and val graph
-    self.edges = self.df['link'].to_numpy()
-    self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
+    # convert slef.df['link'] to torch tensor
+    self.edges = torch.tensor(self.df['link'].to_list(), dtype=torch.long)
+    #self.edges = self.df['link'].to_numpy()
+    #self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
+    self.train_edges = torch.tensor(self.df[self.df['split'] == 0]['link'].to_list(), dtype=torch.long)
     # self.train_edges = self.edges
     # val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
 
-    source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
-    destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
-    ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
+    #source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
+    source = self.train_edges[:, 0]
+    #destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
+    destination = self.train_edges[:, 1]
+    #ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
+    ids = self.train_edges[:, 2]
     train_edge_index = torch.stack([source, destination], dim=0)
     x = torch.arange(num_nodes)
     self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
     self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
     return col_to_stype
-
 
 def create_mask(self, maskable_columns: list[str], masked_dir: str):
     # Generate which columns to mask and store in file for reproducibility across different runs
@@ -87,7 +91,6 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
     else:
         self.target_col = ''
     return col_to_stype
-
 
 def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_columns: list[str],
                col_to_stype: dict[str, torch_frame.stype], mask_type: str) -> dict[str, torch_frame.stype]:
@@ -147,7 +150,6 @@ def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_colum
 
     col_to_stype['mask'] = torch_frame.mask
     return col_to_stype
-
 
 # Randomly mask a column of each row and store original value and max index
 def _mask_column(row: pd.Series, avg_per_num_col):
