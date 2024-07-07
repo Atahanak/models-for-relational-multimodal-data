@@ -493,12 +493,12 @@ def parse_checkpoint(checkpoint: str) -> list[str, int]:
     Raises:
         ValueError: If the checkpoint file does not exist or has an invalid format.
     """
-    full_path = os.path.join(os.getcwd(), checkpoint)
 
-    if not os.path.isfile(full_path):
+    if not os.path.isfile(checkpoint):
         raise ValueError('Checkpoint file does not exist')
 
     pattern = r"^run_(?P<run_id>[a-zA-Z0-9]+)_epoch_(?P<epoch>\d+)\.pth$"
+    logger.info(f'checkpoint: {os.path.basename(checkpoint)}')
     match = re.match(pattern, os.path.basename(checkpoint))
     if match:
         run_id = match.group("run_id")
@@ -634,21 +634,7 @@ def get_model(dataset: IBMTransactionsAML, encoder, channels: int, num_layers: i
     model.to(device)
 
     if checkpoint:
-        # get epoch from checkpoint file name
-        checkpoint.split(".pth")
-        pattern = r"^saved_models/self-supervised/run_(?P<identifier>[a-zA-Z0-9]+)_epoch_(?P<epoch>\d+)\.pth$"
-        match = re.match(pattern, checkpoint)
-
-        if match:
-            identifier = match.group("identifier")
-            epoch = match.group("epoch")
-            print(f'Continuing run_{identifier} using checkpoint file: {checkpoint} from epoch {epoch}')
-            model.load_state_dict(torch.load(checkpoint, map_location=device))
-        else:
-            raise ValueError('Checkpoint file has invalid format')
-    else:
-        model = torch.compile(model, dynamic=True) if compile else model
-
+        model.load_state_dict(torch.load(checkpoint, map_location=device))
     return model
 
 def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: list[torch.nn.Module], lr: float, eps: float, weight_decay: float) -> torch.optim.Optimizer:
@@ -740,6 +726,9 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
     ssmetric = SSMetric(device)
 
     run_id = wandb.run.id
+    logger.info(f"run_id: {run_id}")
+    logger.info(f"run name {wandb.run.name}")
+    logger.info(f"run url {wandb.run.url}")
     os.makedirs(save_dir, exist_ok=True)
 
     if checkpoint_epoch is not None:
@@ -798,9 +787,13 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
                 torch.save(model.state_dict(), model_save_path)
                 logger.info(f'Best MRR model saved to {model_save_path}')
         
-        # save checkpoint
         model_save_path = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch}.pth')
         torch.save(model.state_dict(), model_save_path)
+        logger.info(f'Checkpoint saved to {model_save_path}')
+        if epoch > 1:
+            rpath = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch-1}.pth')
+            os.remove(rpath)
+            logger.info(f'Previous checkpoint removed: {checkpoint}')
 
     wandb.finish()
 
