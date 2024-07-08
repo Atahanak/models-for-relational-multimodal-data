@@ -57,8 +57,8 @@ for ind, edge in enumerate(nx.edges(G)):
     (u, v) = edge
     eg = G[u][v][0]
     amo, tim = eg['amount'], eg['timestamp']
-    #uniq.add((u, v, tim))
-    uniq.add((u, v, amo, tim))
+    uniq.add((u, v, tim))
+    #uniq.add((u, v, amo, tim))
     min_time = min(min_time, tim)
     max_time = max(max_time, tim)
 min_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(min_time))
@@ -74,22 +74,22 @@ logger.info(f'Maximum timestamp: {max_time}')
 
 transactions_path = '/mnt/data/ethereum-phishing-transaction-network/transactions.csv'
 if os.path.exists(transactions_path):
-    # read from_address, to_address, value, block_timestamp from csv
     columns_to_read = ['from_address', 'to_address', 'value', 'block_timestamp']
-    # Define the data types for each column
+    columns_to_read = ['from_address', 'to_address', 'block_timestamp']
     dtype_dict = {
         'from_address': 'str',
         'to_address': 'str',
-        'value': 'str',  # assuming value is numeric
+        #'value': 'str',
         'block_timestamp': 'str'  # assuming block_timestamp is initially read as string
     }
     df = pd.read_csv(transactions_path, usecols=columns_to_read, dtype=dtype_dict) 
     logger.info(f"Read {len(df)} transactions from the csv")
-    df['value'] = df['value'].astype(float)
+    #df['value'] = df['value'].astype(float)
     df['block_timestamp'] = pd.to_datetime(df['block_timestamp']).view('int64') / 10**9
     # print a row of the dataframe
     logger.info(f"A row from the dataframe: {df.iloc[0]}")
-    exists = set(zip(df['from_address'], df['to_address'], df['value'], df['block_timestamp']))
+    #exists = set(zip(df['from_address'], df['to_address'], df['value'], df['block_timestamp']))
+    exists = set(zip(df['from_address'], df['to_address'], df['block_timestamp']))
     uniq = uniq - exists
 logger.info(f"Removed {len(exists)} transactions that are already in the csv")
 logger.info(f"Remaining transactions: {len(uniq)}")
@@ -101,7 +101,7 @@ amounts = [x[2] for x in uniql]
 time_stamps = [datetime.fromtimestamp(x[3], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S%z") for x in uniql]
 
 from google.cloud import bigquery
-client = bigquery.Client(project='cse3000')
+client = bigquery.Client(project='windy-nation-428806-q0')
 
 def get_transactions(from_address, to_address, time_stamps):
     assert len(from_address) == len(to_address) == len(time_stamps)
@@ -131,7 +131,7 @@ start = time.time()
 with open(transactions_path, 'a') as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=['hash', 'nonce', 'transaction_index', 'from_address', 'to_address', 'value', 'gas', 'gas_price', 'receipt_gas_used', 'receipt_contract_address', 'receipt_status', 'block_timestamp', 'block_number', 'max_fee_per_gas', 'max_priority_fee_per_gas', 'transaction_type', 'receipt_effective_gas_price'])
     writer.writeheader()
-    for i in range(0, len(from_address), batch):
+    for i in range(0, 100000, batch):
         start = time.time()
         rows = get_transactions(from_address[i:i+batch], to_address[i:i+batch], time_stamps[i:i+batch])
         read += len(rows)
