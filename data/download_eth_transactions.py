@@ -97,8 +97,8 @@ logger.info(f"Remaining transactions: {len(uniq)}")
 uniql = list(uniq)
 from_address = [x[0] for x in uniql]
 to_address = [x[1] for x in uniql]
-amounts = [x[2] for x in uniql]
-time_stamps = [datetime.fromtimestamp(x[3], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S%z") for x in uniql]
+#amounts = [x[2] for x in uniql]
+time_stamps = [datetime.fromtimestamp(x[2], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S%z") for x in uniql]
 
 from google.cloud import bigquery
 client = bigquery.Client(project='windy-nation-428806-q0')

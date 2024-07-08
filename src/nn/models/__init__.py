@@ -1,13 +1,11 @@
 from .ft_transformer import FTTransformer
-from .fused import FTTransformerGINeFused
-from .fused_ft_transformer_pna import FTTransformerPNAFused
-from .new import New
+from .fused_head import TABGNNFusedHead
+from .fused import TABGNNFused
 from .tabgnn import TABGNN
 
 __all__ = [
     "FTTransformer",
-    "FTTransformerGINeFused",
-    "FTTransformerPNAFused",
-    "New",
+    "TABGNNFusedHead",
+    "TABGNNFused",
     "TABGNN",
 ]

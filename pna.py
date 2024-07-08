@@ -54,7 +54,7 @@ batch_size = 200
 lr = 2e-4
 eps = 1e-8
 weight_decay = 1e-3
-epochs = 50
+epochs = 30
 
 compile = False
 data_split = [0.6, 0.2, 0.2]
@@ -67,11 +67,8 @@ channels = 128
 num_layers = 3
 dropout = 0.5
 
-#pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}
 pretrain = {PretrainType.LINK_PRED}
-#pretrain = 'lp'
-
-testing = True
+testing = False
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
@@ -95,31 +92,32 @@ args = {
     'weight_decay': weight_decay,
 }
 
-np.random.seed(seed)
-random.seed(seed)
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-# When running on the CuDNN backend, two further options must be set
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-# Set a fixed value for the hash seed
-os.environ["PYTHONHASHSEED"] = str(seed)
+# np.random.seed(seed)
+# random.seed(seed)
+# torch.manual_seed(seed)
+# torch.cuda.manual_seed(seed)
+# # When running on the CuDNN backend, two further options must be set
+# torch.backends.cudnn.deterministic = True
+# torch.backends.cudnn.benchmark = False
+# # Set a fixed value for the hash seed
+# os.environ["PYTHONHASHSEED"] = str(seed)
 
 wandb.login()
 run = wandb.init(
-    dir="/mnt/data/",
+    #dir="/mnt/data/",
+    dir="/takyildiz/scratch/",
     mode="disabled" if args['testing'] else "online",
-    project=f"rel-mm-fix", 
+    project=f"exp", 
     name=f"PNA",
-    # group=f"new,mcm",
+    group=f"pna,lp",
     entity="cse3000",
     #name=f"debug-fused",
     config=args
 )
 
 dataset = IBMTransactionsAML(
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain={PretrainType.LINK_PRED},
     mask_type="replace",
     split_type=split_type, 
@@ -130,21 +128,10 @@ dataset.materialize()
 dataset.df.head(5)
 train_dataset, val_dataset, test_dataset = dataset.split()
 
-# %%
-def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    
-g = torch.Generator()
-g.manual_seed(seed)
-
 tensor_frame = dataset.tensor_frame
-train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g, num_workers=4)
-val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
-test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g, num_workers=4)
+train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, num_workers=4)
+val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=False, num_workers=4)
+test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, num_workers=4)
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 
@@ -198,14 +185,25 @@ def lp_inputs(tf: TensorFrame, tensor_frame):
         src, dst = edge[0], edge[1]
 
         # Chose negative examples in a smart way
-        unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
-        unavail_nodes = torch.unique(edge_index[:, unavail_mask])
-        unavail_nodes = set(unavail_nodes.tolist())
-        avail_nodes = nodeset - unavail_nodes
-        avail_nodes = torch.tensor(list(avail_nodes))
-        # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
-        indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
-        neg_nodes = avail_nodes[indices]
+        # unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
+        # unavail_nodes = torch.unique(edge_index[:, unavail_mask])
+        # unavail_nodes = set(unavail_nodes.tolist())
+        # avail_nodes = nodeset - unavail_nodes
+        # avail_nodes = torch.tensor(list(avail_nodes))
+        # # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
+        # indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
+        # neg_nodes = avail_nodes[indices]
+
+        # Create a mask of unavailable nodes
+        unavail_mask = torch.isin(edge_index.flatten(), torch.tensor([src, dst]))
+        unavail_nodes = edge_index.flatten()[unavail_mask].unique()
+        # Create a mask for all nodes
+        all_nodes = torch.arange(max(nodeset) + 1)
+        avail_mask = ~torch.isin(all_nodes, unavail_nodes)
+        # Get available nodes
+        avail_nodes = all_nodes[avail_mask]
+        # Randomly select negative samples from available nodes
+        neg_nodes = avail_nodes[torch.randint(high=len(avail_nodes), size=(num_neg_samples,))]
         
         # Generate num_neg_samples/2 negative edges with the same source but different destinations
         num_neg_samples_half = int(num_neg_samples/2)
@@ -395,7 +393,8 @@ scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=2*lr
 # test_lp = eval_lp(test_loader, model, lp_decoder, "test")
 
 # Create a directory to save models
-save_dir = '/mnt/data/.cache/saved_models'
+#save_dir = '/mnt/data/.cache/saved_models'
+save_dir = '/takyildiz/scratch/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 best_lp = 0
