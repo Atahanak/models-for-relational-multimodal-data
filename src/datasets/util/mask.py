@@ -64,13 +64,15 @@ def create_mask(self, maskable_columns: list[str], masked_dir: str):
         mask = np.random.choice(maskable_columns, size=self.df.shape[0], replace=True)
         np.save(dir_masked_columns, mask)
     return mask
-
+    
 def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
                    col_to_stype: dict[str, torch_frame.stype], supervised_col: str) -> dict[str, torch_frame.stype]:
     # Handle supervised column
     if not pretrain:
-        col_to_stype[supervised_col] = torch_frame.categorical
-        self.target_col = supervised_col
+        # !!! self.df['Is Laundering'] column stores strings "0" and "1".
+        self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)]) + self.df['link'] 
+        self.target_col = 'target'
+        col_to_stype['target'] = torch_frame.relation
         return col_to_stype
 
     # Handle pretrain columns
