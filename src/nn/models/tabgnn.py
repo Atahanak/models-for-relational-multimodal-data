@@ -41,7 +41,7 @@ class TABGNN(Module):
         # fttransformer parameters
         feedforward_channels: Optional[int] = None,
         nhead: int = 8,
-        dropout: float = 0.2,
+        dropout: float = 0.5,
         activation: str = 'relu',
     ) -> None:
         super().__init__()
@@ -61,7 +61,6 @@ class TABGNN(Module):
         self.tabular_backbone = ModuleList()
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
-            self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, 0.2, activation, nhidden))
             self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
             self.gnn_backbone.append(PNALayer(channels, nhidden, deg))
         self.reset_parameters()
@@ -172,7 +171,7 @@ class PNALayer(Module):
         return x_gnn, edge_attr
     
 class FTTransformerLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128):
+    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128):
         super().__init__()
         self.channels = channels
         self.nhidden = nhidden
