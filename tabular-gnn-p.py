@@ -696,6 +696,7 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
         'dropout': dropout,
         'weight_decay': weight_decay,
     }
+    logger.info(f"args: {args}")
 
     if checkpoint == "":
         checkpoint = None
@@ -787,13 +788,14 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
                 torch.save(model.state_dict(), model_save_path)
                 logger.info(f'Best MRR model saved to {model_save_path}')
         
-        model_save_path = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch}.pth')
-        torch.save(model.state_dict(), model_save_path)
-        logger.info(f'Checkpoint saved to {model_save_path}')
-        if epoch > 1:
-            rpath = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch-1}.pth')
-            os.remove(rpath)
-            logger.info(f'Previous checkpoint removed: {checkpoint}')
+        if not testing:
+            model_save_path = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch}.pth')
+            torch.save(model.state_dict(), model_save_path)
+            logger.info(f'Checkpoint saved to {model_save_path}')
+            if epoch > 1:
+                rpath = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch-1}.pth')
+                os.remove(rpath)
+                logger.info(f'Previous checkpoint removed: {checkpoint}')
 
     wandb.finish()
 
