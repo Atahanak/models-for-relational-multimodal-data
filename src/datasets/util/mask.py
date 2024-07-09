@@ -73,6 +73,8 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)]) + self.df['link'] 
         self.target_col = 'target'
         col_to_stype['target'] = torch_frame.relation
+        self.df = self.df.drop(columns=['link'])
+        del col_to_stype['link']
         return col_to_stype
 
     # Handle pretrain columns
