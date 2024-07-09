@@ -2,6 +2,21 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import Linear
 
+class ClassifierHead(nn.Module):
+    def __init__(self, n_classes=1, n_hidden=128, dropout=0.5):
+        super().__init__()
+        self.n_hidden = n_hidden
+        
+        self.mlp = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(dropout),
+                              Linear(25, n_classes))
+    
+    def forward(self, x, edge_index, edge_attr):
+        x = x[edge_index.T].reshape(-1, 2 * self.n_hidden).relu()
+        x = torch.cat((x, edge_attr.view(-1, edge_attr.shape[1])), 1)
+
+        return self.mlp(x)
+
+
 class LinkPredHead(torch.nn.Module):
     """Readout head for link prediction.
 
