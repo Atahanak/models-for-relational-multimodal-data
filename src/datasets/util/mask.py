@@ -67,7 +67,6 @@ class PretrainType(Enum):
 #     print(f"Time to create graph: {time.time() - start}")
 #     return col_to_stype
 
-
 def create_graph(self, col_to_stype, src_column, dst_column):
 
     # Convert src and dst columns to tensors directly
@@ -94,15 +93,24 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     # Create train graph
     train_mask = self.df['split'] == 0
     train_mask = torch.tensor(train_mask.to_numpy(), dtype=torch.bool)
-
     train_edge_index = edge_index[:, train_mask]
     train_ids = ids[train_mask]
-    
-    # Create the train graph
     self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=train_ids)
-    
-    # Initialize the sampler
-    self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+    self.train_sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+
+    # Create val graph
+    val_mask = self.df['split'] == 0 | self.df['split'] == 1
+    val_mask = torch.tensor(val_mask.to_numpy(), dtype=torch.bool)
+    val_edge_index = edge_index[:, val_mask]
+    val_ids = ids[val_mask]
+    self.val_graph = torch_geometric.data.Data(x=x, edge_index=val_edge_index, edge_attr=val_ids)
+    self.val_sampler = NeighborSampler(self.val_graph, num_neighbors=self.khop_neighbors)
+
+    # Create test graph
+    test_edge_index = edge_index
+    test_ids = ids
+    self.test_graph = torch_geometric.data.Data(x=x, edge_index=test_edge_index, edge_attr=test_ids)
+    self.test_sampler = NeighborSampler(self.test_graph, num_neighbors=self.khop_neighbors)
 
     # Update col_to_stype
     col_to_stype['link'] = torch_frame.relation
