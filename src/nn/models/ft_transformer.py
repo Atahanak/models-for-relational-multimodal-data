@@ -56,30 +56,36 @@ class FTTransformer(Module):
     def __init__(
         self,
         channels: int,
-        out_channels: int,
+        #out_channels: int,
         num_layers: int,
-        col_stats: dict[str, dict[StatType, Any]],
-        col_names_dict: dict[torch_frame.stype, list[str]],
-        stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
-        pretrain: set[PretrainType] = set(),
+        encoder,
+        decoder
+        # col_stats: dict[str, dict[StatType, Any]],
+        # col_names_dict: dict[torch_frame.stype, list[str]],
+        # stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
+        #pretrain: set[PretrainType] = set(),
     ) -> None:
         super().__init__()
         if num_layers <= 0:
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
+        
+        self.encoder = encoder
+        self.decoder = decoder
 
-        if stype_encoder_dict is None:
-            stype_encoder_dict = {
-                stype.categorical: EmbeddingEncoder(),
-                stype.numerical: LinearEncoder(),
-            }
+        # if stype_encoder_dict is None:
+        #     stype_encoder_dict = {
+        #         stype.categorical: EmbeddingEncoder(),
+        #         stype.numerical: LinearEncoder(),
+        #     }
 
-        self.encoder = StypeWiseFeatureEncoder(
-            out_channels=channels,
-            col_stats=col_stats,
-            col_names_dict=col_names_dict,
-            stype_encoder_dict=stype_encoder_dict,
-        )
+        # self.encoder = StypeWiseFeatureEncoder(
+        #     out_channels=channels,
+        #     col_stats=col_stats,
+        #     col_names_dict=col_names_dict,
+        #     stype_encoder_dict=stype_encoder_dict,
+        # )
+        
         self.backbone = FTTransformerConvs(channels=channels,
                                            num_layers=num_layers)
         

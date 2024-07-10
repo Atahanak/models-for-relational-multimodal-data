@@ -79,7 +79,6 @@ class TABGNNFusedHead(Module):
 
         # general parameters
         channels: int,
-        out_channels: int,
         num_layers: int,
         col_stats: dict[str, dict[StatType, Any]],
         col_names_dict: dict[torch_frame.stype, list[str]],

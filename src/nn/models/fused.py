@@ -72,30 +72,19 @@ class TABGNNFused(Module):
     """
     def __init__(
         self,
-
         # general parameters
         channels: int,
-        out_channels: int,
         num_layers: int,
-        col_stats: dict[str, dict[StatType, Any]],
-        col_names_dict: dict[torch_frame.stype, list[str]],
-        stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
         encoder: StypeWiseFeatureEncoder = None,
-        
-        # training parameters
-        pretrain: set[PretrainType] = False,
-
         # PNA parameters
         deg=None,
         node_dim: int = 1,
         nhidden: int = 128,
         edge_dim: int = None,
-        final_dropout: float = 0.5,
-
         # fttransformer parameters
         feedforward_channels: Optional[int] = None,
         nhead: int = 8,
-        dropout: float = 0.2,
+        dropout: float = 0.5,
         activation: str = 'relu',
     ) -> None:
         super().__init__()
@@ -103,27 +92,10 @@ class TABGNNFused(Module):
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
         
-        self.pretrain = pretrain
         self.channels = channels
         self.nhidden = nhidden
         self.edge_dim = edge_dim + channels
-        
-        if encoder is None:
-            if stype_encoder_dict is None:
-                stype_encoder_dict = {
-                    stype.categorical: EmbeddingEncoder(),
-                    stype.numerical: LinearEncoder(),
-                    stype.timestamp: TimestampEncoder()
-                }
-
-            self.encoder = StypeWiseFeatureEncoder(
-                out_channels=channels,
-                col_stats=col_stats,
-                col_names_dict=col_names_dict,
-                stype_encoder_dict=stype_encoder_dict,
-            )
-        else:
-            self.encoder = encoder
+        self.encoder = encoder
 
         # fttransformer
         self.cls_embedding = Parameter(torch.empty(channels))
@@ -145,34 +117,43 @@ class TABGNNFused(Module):
 
         #backbone
         self.backbone = ModuleList()
-        for i in range(num_layers):
-            #if i == (num_layers - 1):
-            if True:
-                self.backbone.append(
-                    FTTransformerPNAParallelLayer(
-                        channels, 
-                        nhead, 
-                        feedforward_channels, 
-                        dropout, 
-                        activation, 
-                        nhidden,
-                        final_dropout,
-                        deg
-                    )
-                )
-            else:
-                self.backbone.append(
-                    FTTransformerPNAFusedLayer(
-                        channels, 
-                        nhead, 
-                        feedforward_channels, 
-                        dropout, 
-                        activation, 
-                        nhidden,
-                        final_dropout,
-                        deg
-                    )
-                )
+        # for i in range(num_layers):
+        #     #if i == (num_layers - 1):
+        #     if True:
+        #         self.backbone.append(
+        #             FTTransformerPNAParallelLayer(
+        #                 channels, 
+        #                 nhead, 
+        #                 feedforward_channels, 
+        #                 dropout, 
+        #                 activation, 
+        #                 nhidden,
+        #                 deg
+        #             )
+        #         )
+        #     else:
+        #         self.backbone.append(
+        #             FTTransformerPNAFusedLayer(
+        #                 channels, 
+        #                 nhead, 
+        #                 feedforward_channels, 
+        #                 dropout, 
+        #                 activation, 
+        #                 nhidden,
+        #                 deg
+        #             )
+        #         )
+        self.backbone.append(
+            FTTransformerPNAFusedLayer(
+                channels, 
+                nhead, 
+                feedforward_channels, 
+                dropout, 
+                activation, 
+                nhidden,
+                deg
+            )
+        )
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -186,14 +167,13 @@ class TABGNNFused(Module):
         self.encoder.reset_parameters()
         for layer in self.backbone:
             layer.reset_parameters()
-        #self.decoder.reset_parameters()
 
     def get_shared_params(self):
         param_groups = [
             self.encoder.parameters(),
             [self.cls_embedding],  # Wrap single parameters in a list
             self.node_emb.parameters(),
-            #self.edge_emb.parameters(),
+            self.edge_emb.parameters(),
             self.backbone[:-1].parameters(),
         ]
         
@@ -220,48 +200,28 @@ class TABGNNFused(Module):
         B = len(target_edge_attr)
 
         x_gnn = self.node_emb(x)
-        # edge_attr, _ = self.encoder(edge_attr)
-        # target_edge_attr, _ = self.encoder(target_edge_attr)
         
         x_cls = self.cls_embedding.repeat(B, 1, 1)
-        x_tab = torch.cat([x_cls, target_edge_attr], dim=1)
-        x_tab = self.tab_norm(self.tab_conv(x_tab))
+        target_edge_attr = torch.cat([x_cls, target_edge_attr], dim=1)
+        target_edge_attr = self.tab_norm(self.tab_conv(target_edge_attr))
 
         x_edge = self.cls_embedding.repeat(edge_index.shape[1], 1, 1)
         edge_attr = torch.cat([x_edge, edge_attr], dim=1)
         edge_attr = self.tab_norm(self.tab_conv(edge_attr))
-        #edge_attr, _ = edge_attr[:, 0, :], edge_attr[:, 1:, :]
-
-        #_, edge_attr = edge_attr[:, 0, :], edge_attr[:, 1:, :]
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
+        x_tab = target_edge_attr
         for layer in self.backbone:
-            # x_t = x_tab
-            # x_g = x_gnn
             x_tab, x_gnn, edge_attr = layer(x_tab, x_gnn, edge_index, edge_attr, target_edge_index, lp)
-            # x_tab = (x_tab + x_t)/2
-            # x_gnn = (x_gnn + x_g)/2
-
-
-        # x_edge = self.cls_embedding.repeat(target_edge_index.shape[1], 1, 1)
-        # target_edge_attr = torch.cat([x_edge, target_edge_attr], dim=1)
-        # target_edge_attr = self.tab_norm(self.tab_conv(target_edge_attr))
-        # # target_edge_attr, _ = target_edge_attr[:, 0, :], target_edge_attr[:, 1:, :]
-        # _, target_edge_attr = target_edge_attr[:, 0, :], target_edge_attr[:, 1:, :]
         
-        # target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
-        # target_edge_attr = self.edge_emb(target_edge_attr)
-        # return target_edge_attr, x_gnn
-
-        #x_tab, _ = x_tab[:, 0, :], x_tab[:, 1:, :]
-        #_, x_tab = x_tab[:, 0, :], x_tab[:, 1:, :]
-        x_tab = x_tab.view(-1, self.edge_dim)
-        x_tab = self.edge_emb(x_tab)
-        return x_tab, x_gnn
+        target_edge_attr = (x_tab + target_edge_attr) / 2
+        target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
+        target_edge_attr = self.edge_emb(target_edge_attr)
+        return x_gnn, edge_attr, target_edge_attr
 
 class FTTransformerPNAFusedLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
+    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128, deg=None):
         super().__init__()
         self.channels = channels
         #nhidden = int((nhidden // 5) * 5)
@@ -305,9 +265,9 @@ class FTTransformerPNAFusedLayer(Module):
         self.fuse = Sequential(
             LayerNorm(fused_dim),
             Linear(fused_dim, 4*fused_dim), 
-            LeakyReLU(), Dropout(final_dropout), 
+            LeakyReLU(), Dropout(dropout), 
             Linear(4*fused_dim, 4*fused_dim), LeakyReLU(), 
-            Dropout(final_dropout),
+            Dropout(dropout),
             Linear(4*fused_dim, fused_dim)
         )
         self.fuse_norm = LayerNorm(fused_dim)
@@ -332,11 +292,8 @@ class FTTransformerPNAFusedLayer(Module):
         x_tab_cls, x_tab_feat = x_tab[:, 0, :], x_tab[:, 1:, :]
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-
-        # edge update
         src, dst = edge_index
         edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
-        #logger.info(f"x_gnn {x_gnn.shape}")
 
         if not lp:
             x = torch.cat([x_tab_cls, x_gnn[target_edge_index[0]], x_gnn[target_edge_index[1]]], dim=-1)
@@ -347,31 +304,30 @@ class FTTransformerPNAFusedLayer(Module):
 
             # TODO: pooling
             index = target_edge_index.flatten()
-            logger.info(f"index {index.shape}")
+            #logger.info(f"index {index.shape}")
             emb = torch.cat([x[:, self.channels:self.channels+self.nhidden], x[:, self.channels+self.nhidden:]], dim=0)
-            logger.info(f"emb {emb.shape}")
+            #logger.info(f"emb {emb.shape}")
             # Identify the unique indices and their corresponding inverse indices
             unique_indices, inverse_indices = torch.unique(index, return_inverse=True)
-            logger.info(f"uniq {unique_indices.shape}, inverse {inverse_indices.shape}")
+            #logger.info(f"uniq {unique_indices.shape}, inverse {inverse_indices.shape}")
             # Create a tensor of zeros to accumulate the sums
             summed_emb = torch.zeros((unique_indices.size(0), emb.size(1)), dtype=torch.float, device=emb.device)
-            logger.info(f"summed {summed_emb.shape}")
+            #logger.info(f"summed {summed_emb.shape}")
             # Use scatter_add to sum the vectors corresponding to the same indices
             summed_emb.index_add_(0, inverse_indices, emb)
-            logger.info(f"summed {summed_emb.shape}")
+            #logger.info(f"summed {summed_emb.shape}")
             # Count the occurrences of each index
             counts = torch.bincount(inverse_indices)
-            logger.info(f"counts {counts.shape}")
+            #logger.info(f"counts {counts.shape}")
             # Divide the summed vectors by their counts to get the average
             pooled_emb = summed_emb / counts.unsqueeze(1).float()
-            logger.info(f"pooled {pooled_emb.shape}")
-            sys.exit()
-
-            x_gnn[unique_indeces] = (x_gnn[unique_indeces] + pooled_emb) / 2
+            #logger.info(f"pooled {pooled_emb.shape}")
+            x_gnn[unique_indices] = (x_gnn[unique_indices] + pooled_emb) / 2
+            #sys.exit()
         return x_tab, x_gnn, edge_attr
     
 class FTTransformerPNAParallelLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
+    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128, deg=None):
         super().__init__()
         self.channels = channels
         #nhidden = int((nhidden // 5) * 5)
