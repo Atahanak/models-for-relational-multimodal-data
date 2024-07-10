@@ -39,6 +39,8 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     #self.edges = self.df['link'].to_numpy()
     #self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
     self.train_edges = torch.tensor(self.df[self.df['split'] == 0]['link'].to_list(), dtype=torch.long)
+    self.val_edges = torch.tensor(self.df[(self.df['split'] == 0) | (self.df['split'] == 1)]['link'].to_list(), dtype=torch.long)
+    self.test_edges = torch.tensor(self.df['link'].to_list(), dtype=torch.long)
     # self.train_edges = self.edges
     # val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
 
@@ -52,6 +54,17 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     x = torch.arange(num_nodes)
     self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
     self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+
+    val_edge_index = self.val_edges[:, :2].T.contiguous()
+    ids = self.val_edges[:, 2].contiguous()
+    self.val_graph = torch_geometric.data.Data(x=x, edge_index=val_edge_index, edge_attr=ids)
+    self.val_sampler = NeighborSampler(self.val_graph, num_neighbors=self.khop_neighbors)
+
+    test_edge_index = self.test_edges[:, :2].T.contiguous()
+    ids = self.test_edges[:, 2].contiguous()
+    self.test_graph = torch_geometric.data.Data(x=x, edge_index=test_edge_index, edge_attr=ids)
+    self.test_sampler = NeighborSampler(self.test_graph, num_neighbors=self.khop_neighbors)
+
     return col_to_stype
 
 def create_mask(self, maskable_columns: list[str], masked_dir: str):

@@ -100,7 +100,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
-        def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
+        def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
             """k-hop sampling.
             
             If k-hop sampling, this method **guarantees** that the first 
@@ -129,9 +129,19 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # idx = [int(edge[2]) for edge in edges]
 
             input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
-            out = self.sampler.sample_from_edges(input)
             
-            perm = self.sampler.edge_permutation 
+            if mode == 'train':
+                out = self.sampler.sample_from_edges(input)
+                perm = self.sampler.edge_permutation 
+            elif mode == 'val':
+                out = self.val_sampler.sample_from_edges(input)
+                perm = self.val_sampler.edge_permutation 
+            elif mode =='test':
+                out = self.test_sampler.sample_from_edges(input)
+                perm = self.test_sampler.edge_permutation 
+            else:
+                raise ValueError("Mode is incorrect! ['train', 'val', 'test']")
+
             e_id = perm[out.edge] if perm is not None else out.edge
 
             # edge_set = set()
