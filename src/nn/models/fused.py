@@ -207,11 +207,10 @@ class TABGNNFused(Module):
 
         x_edge = self.cls_embedding.repeat(edge_index.shape[1], 1, 1)
         edge_attr = torch.cat([x_edge, edge_attr], dim=1)
-        edge_attr = self.tab_norm(self.tab_conv(edge_attr))
+        edge_attr = (edge_attr + self.tab_norm(self.tab_conv(edge_attr))) / 2
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
-        x_tab = target_edge_attr
         for layer in self.backbone:
             x_tab, x_gnn, edge_attr = layer(x_tab, x_gnn, edge_index, edge_attr, target_edge_index, lp)
         
