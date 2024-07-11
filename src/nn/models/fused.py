@@ -288,42 +288,26 @@ class FTTransformerPNAFusedLayer(Module):
                 torch.nn.init.xavier_uniform_(p)
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index, lp=False):
-        x_tab = self.tab_norm(self.tab_conv(x_tab))
+        x_tab = (x_tab + self.tab_norm(self.tab_conv(x_tab)) / 2)
         x_tab_cls, x_tab_feat = x_tab[:, 0, :], x_tab[:, 1:, :]
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
         src, dst = edge_index
         edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
 
-        if not lp:
+        if not lp: # pool fused node embeddings
             x = torch.cat([x_tab_cls, x_gnn[target_edge_index[0]], x_gnn[target_edge_index[1]]], dim=-1)
             x = (x + self.fuse_norm(self.fuse(x))) / 2
-
             x_tab_cls = (x_tab_cls + x[:,:self.channels]) / 2
             x_tab = torch.cat([x_tab_cls.unsqueeze(1), x_tab_feat], dim=1)
-
-            # TODO: pooling
             index = target_edge_index.flatten()
-            #logger.info(f"index {index.shape}")
             emb = torch.cat([x[:, self.channels:self.channels+self.nhidden], x[:, self.channels+self.nhidden:]], dim=0)
-            #logger.info(f"emb {emb.shape}")
-            # Identify the unique indices and their corresponding inverse indices
             unique_indices, inverse_indices = torch.unique(index, return_inverse=True)
-            #logger.info(f"uniq {unique_indices.shape}, inverse {inverse_indices.shape}")
-            # Create a tensor of zeros to accumulate the sums
             summed_emb = torch.zeros((unique_indices.size(0), emb.size(1)), dtype=torch.float, device=emb.device)
-            #logger.info(f"summed {summed_emb.shape}")
-            # Use scatter_add to sum the vectors corresponding to the same indices
             summed_emb.index_add_(0, inverse_indices, emb)
-            #logger.info(f"summed {summed_emb.shape}")
-            # Count the occurrences of each index
             counts = torch.bincount(inverse_indices)
-            #logger.info(f"counts {counts.shape}")
-            # Divide the summed vectors by their counts to get the average
             pooled_emb = summed_emb / counts.unsqueeze(1).float()
-            #logger.info(f"pooled {pooled_emb.shape}")
             x_gnn[unique_indices] = (x_gnn[unique_indices] + pooled_emb) / 2
-            #sys.exit()
         return x_tab, x_gnn, edge_attr
     
 class FTTransformerPNAParallelLayer(Module):
@@ -376,7 +360,7 @@ class FTTransformerPNAParallelLayer(Module):
         self.gnn_norm.reset_parameters()
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index=None, lp=False):
-       x_tab = self.tab_norm(self.tab_conv(x_tab))
+       x_tab = (x_tab + self.tab_norm(self.tab_conv(x_tab)) / 2)
        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
        src, dst = edge_index
        edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
