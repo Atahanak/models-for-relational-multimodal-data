@@ -122,7 +122,7 @@ def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, 
     return {'loss': loss_lp_accum / total_count} 
 
 @torch.no_grad()
-def eval_mcm(dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
+def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
     encoder.eval()
     model.eval()
     mcm_decoder.eval()
@@ -173,13 +173,14 @@ def eval_mcm(dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_n
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
+            "epoch": epoch,
             f"{dataset_name}_accuracy": accuracy,
             f"{dataset_name}_rmse": rmse,
         })
         return {"accuracy": accuracy, "rmse": rmse}
 
 @torch.no_grad()
-def eval_lp(dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> float:
+def eval_lp(epoch, dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> float:
     encoder.eval()
     model.eval()
     lp_decoder.eval()
@@ -229,15 +230,16 @@ def eval_lp(dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_nam
                 hits10=f'{np.mean(hits10):.4f}',
                 loss_lp = f'{loss_lp_accum/total_count:.4f}',
             )
-        wandb.log({
-            f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
-        })
+            wandb.log({
+                f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
         hits5 = np.mean(hits5)
         hits10 = np.mean(hits10)
         wandb.log({
+            "epoch": epoch,
             f"{dataset_name}_mrr": mrr_score,
             f"{dataset_name}_hits@1": hits1,
             f"{dataset_name}_hits@2": hits2,
@@ -313,7 +315,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
     return {'loss': loss_accum / total_count} 
 
 @torch.no_grad()
-def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name, moo):
+def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name, moo):
     encoder.eval()
     model.eval()
     lp_decoder.eval()
@@ -410,6 +412,7 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name,
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
+            "epoch": epoch,
             f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
             f"{dataset_name}_loss_c": loss_c_accum/t_c,
             f"{dataset_name}_loss_n": loss_n_accum/t_n,
@@ -688,30 +691,29 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
     best_rmse = 2
 
     for epoch in range(start_epoch, end_epoch):
-        wandb.log({"epoch": epoch})
         logger.info(f"Epoch {epoch}:")
         if mode == "mcm-lp":
             loss = train(dataset, train_loader, epoch, encoder, model, lp_decoder, mcm_decoder, optimizer, scheduler, moo)
             logger.info(f"loss: {loss}")
-            val_lp, val_mcm = eval(dataset, val_loader, encoder, model, lp_decoder, mcm_decoder, "val", moo)
+            val_lp, val_mcm = eval(epoch, dataset, val_loader, encoder, model, lp_decoder, mcm_decoder, "val", moo)
             logger.info(f"val_mcm: {val_mcm}")
             logger.info(f"val_lp: {val_lp}")
-            test_lp, test_mcm = eval(dataset, test_loader, encoder, model, lp_decoder, mcm_decoder, "test", moo)
+            test_lp, test_mcm = eval(epoch, dataset, test_loader, encoder, model, lp_decoder, mcm_decoder, "test", moo)
             logger.info(f"test_mcm: {test_mcm}")
             logger.info(f"test_lp: {test_lp}")
         elif mode == "mcm":
             mcm_loss = train_mcm(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
             logger.info(f"loss_mcm: {mcm_loss}")
-            val_mcm = eval_mcm(dataset, val_loader, encoder, model, mcm_decoder, "val")
+            val_mcm = eval_mcm(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
             logger.info(f"val_mcm: {val_mcm}")
-            test_mcm = eval_mcm(dataset, test_loader, encoder, model, mcm_decoder, "test")
+            test_mcm = eval_mcm(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
             logger.info(f"test_mcm: {test_mcm}")
         elif mode == "lp":
             lp_loss = train_lp(dataset, train_loader, epoch, encoder, model, lp_decoder, optimizer, scheduler)
             logger.info(f"loss_lp: {lp_loss}")
-            val_lp = eval_lp(dataset, val_loader, encoder, model, lp_decoder, "val")
+            val_lp = eval_lp(epoch, dataset, val_loader, encoder, model, lp_decoder, "val")
             logger.info(f"val_lp: {val_lp}")
-            test_lp = eval_lp(dataset, test_loader, encoder, model, lp_decoder, "test")
+            test_lp = eval_lp(epoch, dataset, test_loader, encoder, model, lp_decoder, "test")
             logger.info(f"test_lp: {test_lp}")
 
         if mode == "mcm-lp" or mode == "mcm":            

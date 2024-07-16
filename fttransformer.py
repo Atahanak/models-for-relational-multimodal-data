@@ -36,6 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+torch.set_num_threads(4)
 torch.set_float32_matmul_precision('high')
 torch.autograd.set_detect_anomaly(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -332,8 +333,7 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
             loss_n = loss_n_accum / t_n
             wandb.log({f"{dataset_name}_loss_mcm": loss_c_mcm,
                        f"{dataset_name}_loss_c": loss_c,
-                       f"{dataset_name}_loss_n": loss_n,
-                       "epoch": epoch})
+                       f"{dataset_name}_loss_n": loss_n})
 
             acc = accum_acc / t_c
             rmse = torch.sqrt(accum_l2 / t_n)
@@ -345,7 +345,7 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
                           loss_c=f'{loss_c:.4f}',
                           loss_n=f'{loss_n:.4f}')
 
-        wandb.log({f"{dataset_name}_accuracy": accum_acc / t_c,
+        wandb.log({"epoch": epoch, f"{dataset_name}_accuracy": accum_acc / t_c,
                    f"{dataset_name}_rmse": rmse,
                    f"{dataset_name}_loss": loss,
                    f"{dataset_name}_loss_c_mcm": loss_c_mcm,
@@ -403,7 +403,6 @@ def main(checkpoint="None", dataset="/path/to/your/dataset/", run_name="fttransf
         end_epoch = epochs + 1
 
     for epoch in range(start_epoch, end_epoch):
-        wandb.log({"epoch": epoch})
         train_loss = train(encoder, model, decoder, train_loader, optimizer, epoch)
         logger.info(f"Epoch {epoch} Train Loss: {train_loss}")
         # train_metric = test(model, train_loader, "tr", epoch)

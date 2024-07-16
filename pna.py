@@ -25,6 +25,7 @@ from src.nn.gnn import PNA
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
 from src.nn.gnn.decoder import LinkPredHead
+from src.utils.batch_processing import lp_inputs
 
 from tqdm import tqdm
 import wandb
@@ -41,14 +42,11 @@ logging.basicConfig(
         logging.StreamHandler()  # Also output log messages to the console
     ]
 )
-
-# Create a logger
 logger = logging.getLogger(__name__)
 import sys
 
 torch.set_float32_matmul_precision('high')
 
-# %%
 seed = 42
 batch_size = 200
 lr = 2e-4
@@ -92,16 +90,6 @@ args = {
     'weight_decay': weight_decay,
 }
 
-# np.random.seed(seed)
-# random.seed(seed)
-# torch.manual_seed(seed)
-# torch.cuda.manual_seed(seed)
-# # When running on the CuDNN backend, two further options must be set
-# torch.backends.cudnn.deterministic = True
-# torch.backends.cudnn.benchmark = False
-# # Set a fixed value for the hash seed
-# os.environ["PYTHONHASHSEED"] = str(seed)
-
 wandb.login()
 run = wandb.init(
     #dir="/mnt/data/",
@@ -140,95 +128,95 @@ logger.info(f"num_numerical: {num_numerical}")
 logger.info(f"num_categorical: {num_categorical}")
 logger.info(f"num_columns: {num_columns}")
 
-def lp_inputs(tf: TensorFrame, tensor_frame):
+# def lp_inputs(tf: TensorFrame, tensor_frame):
     
-    edges = tf.y[:,-3:]
-    batch_size = len(edges)
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
+#     edges = tf.y[:,-3:]
+#     batch_size = len(edges)
+#     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
 
-    edge_attr = tensor_frame.__getitem__(idx)
+#     edge_attr = tensor_frame.__getitem__(idx)
 
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0]
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
+#     nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+#     num_nodes = nodes.shape[0]
+#     node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
 
-    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+#     n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+#     local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+#     local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+#     edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
-    drop_edge_ind = torch.tensor([x for x in range(int(batch_size))])
-    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
-    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    input_edge_index = edge_index[:, ~mask]
-    input_edge_attr  = edge_attr[~mask]
+#     drop_edge_ind = torch.tensor([x for x in range(int(batch_size))])
+#     mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
+#     mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
+#     input_edge_index = edge_index[:, ~mask]
+#     input_edge_attr  = edge_attr[~mask]
 
-    pos_edge_index = edge_index[:, mask]
-    pos_edge_attr  = edge_attr[mask]
+#     pos_edge_index = edge_index[:, mask]
+#     pos_edge_attr  = edge_attr[mask]
 
-    # generate/sample negative edges
-    neg_edges = []
-    target_dict = pos_edge_attr.feat_dict
-    for key, value in pos_edge_attr.feat_dict.items():
-        attr = []
-        # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
-        for r in value:
-            if key == stype.timestamp:
-                attr.append(r.repeat(num_neg_samples, 1, 1))
-            else:
-                attr.append(r.repeat(num_neg_samples, 1))
-        target_dict[key] = torch.cat([target_dict[key], torch.cat(attr, dim=0)], dim=0)
-    target_edge_attr = TensorFrame(target_dict, pos_edge_attr.col_names_dict)
+#     # generate/sample negative edges
+#     neg_edges = []
+#     target_dict = pos_edge_attr.feat_dict
+#     for key, value in pos_edge_attr.feat_dict.items():
+#         attr = []
+#         # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
+#         for r in value:
+#             if key == stype.timestamp:
+#                 attr.append(r.repeat(num_neg_samples, 1, 1))
+#             else:
+#                 attr.append(r.repeat(num_neg_samples, 1))
+#         target_dict[key] = torch.cat([target_dict[key], torch.cat(attr, dim=0)], dim=0)
+#     target_edge_attr = TensorFrame(target_dict, pos_edge_attr.col_names_dict)
 
-    nodeset = set(range(edge_index.max()+1))
-    for i, edge in enumerate(pos_edge_index.t()):
-        src, dst = edge[0], edge[1]
+#     nodeset = set(range(edge_index.max()+1))
+#     for i, edge in enumerate(pos_edge_index.t()):
+#         src, dst = edge[0], edge[1]
 
-        # Chose negative examples in a smart way
-        # unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
-        # unavail_nodes = torch.unique(edge_index[:, unavail_mask])
-        # unavail_nodes = set(unavail_nodes.tolist())
-        # avail_nodes = nodeset - unavail_nodes
-        # avail_nodes = torch.tensor(list(avail_nodes))
-        # # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
-        # indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
-        # neg_nodes = avail_nodes[indices]
+#         # Chose negative examples in a smart way
+#         # unavail_mask = (edge_index == src).any(dim=0) | (edge_index == dst).any(dim=0)
+#         # unavail_nodes = torch.unique(edge_index[:, unavail_mask])
+#         # unavail_nodes = set(unavail_nodes.tolist())
+#         # avail_nodes = nodeset - unavail_nodes
+#         # avail_nodes = torch.tensor(list(avail_nodes))
+#         # # Finally, emmulate np.random.choice() to chose randomly amongst available nodes
+#         # indices = torch.randperm(len(avail_nodes))[:num_neg_samples]
+#         # neg_nodes = avail_nodes[indices]
 
-        # Create a mask of unavailable nodes
-        unavail_mask = torch.isin(edge_index.flatten(), torch.tensor([src, dst]))
-        unavail_nodes = edge_index.flatten()[unavail_mask].unique()
-        # Create a mask for all nodes
-        all_nodes = torch.arange(max(nodeset) + 1)
-        avail_mask = ~torch.isin(all_nodes, unavail_nodes)
-        # Get available nodes
-        avail_nodes = all_nodes[avail_mask]
-        # Randomly select negative samples from available nodes
-        neg_nodes = avail_nodes[torch.randint(high=len(avail_nodes), size=(num_neg_samples,))]
+#         # Create a mask of unavailable nodes
+#         unavail_mask = torch.isin(edge_index.flatten(), torch.tensor([src, dst]))
+#         unavail_nodes = edge_index.flatten()[unavail_mask].unique()
+#         # Create a mask for all nodes
+#         all_nodes = torch.arange(max(nodeset) + 1)
+#         avail_mask = ~torch.isin(all_nodes, unavail_nodes)
+#         # Get available nodes
+#         avail_nodes = all_nodes[avail_mask]
+#         # Randomly select negative samples from available nodes
+#         neg_nodes = avail_nodes[torch.randint(high=len(avail_nodes), size=(num_neg_samples,))]
         
-        # Generate num_neg_samples/2 negative edges with the same source but different destinations
-        num_neg_samples_half = int(num_neg_samples/2)
-        neg_dsts = neg_nodes[:num_neg_samples_half]  # Selecting num_neg_samples/2 random destination nodes for the source
-        neg_edges_src = torch.stack([src.repeat(num_neg_samples_half), neg_dsts], dim=0)
+#         # Generate num_neg_samples/2 negative edges with the same source but different destinations
+#         num_neg_samples_half = int(num_neg_samples/2)
+#         neg_dsts = neg_nodes[:num_neg_samples_half]  # Selecting num_neg_samples/2 random destination nodes for the source
+#         neg_edges_src = torch.stack([src.repeat(num_neg_samples_half), neg_dsts], dim=0)
         
-        # Generate num_neg_samples/2 negative edges with the same destination but different sources
-        neg_srcs = neg_nodes[num_neg_samples_half:]  # Selecting num_neg_samples/2 random source nodes for the destination
-        neg_edges_dst = torch.stack([neg_srcs, dst.repeat(num_neg_samples_half)], dim=0)
+#         # Generate num_neg_samples/2 negative edges with the same destination but different sources
+#         neg_srcs = neg_nodes[num_neg_samples_half:]  # Selecting num_neg_samples/2 random source nodes for the destination
+#         neg_edges_dst = torch.stack([neg_srcs, dst.repeat(num_neg_samples_half)], dim=0)
 
-        # Add these negative edges to the list
-        neg_edges.append(neg_edges_src)
-        neg_edges.append(neg_edges_dst)
+#         # Add these negative edges to the list
+#         neg_edges.append(neg_edges_src)
+#         neg_edges.append(neg_edges_dst)
     
-    input_edge_index = input_edge_index.to(device)
-    input_edge_attr = input_edge_attr.to(device)
-    #pos_edge_index = pos_edge_index.to(device)
-    #pos_edge_attr = pos_edge_attr.to(device)
-    node_feats = node_feats.to(device)
-    if len(neg_edges) > 0:
-        #neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-        neg_edge_index = torch.cat(neg_edges, dim=1)
-    target_edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1).to(device)
-    target_edge_attr = target_edge_attr.to(device)
-    return node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr
+#     input_edge_index = input_edge_index.to(device)
+#     input_edge_attr = input_edge_attr.to(device)
+#     #pos_edge_index = pos_edge_index.to(device)
+#     #pos_edge_attr = pos_edge_attr.to(device)
+#     node_feats = node_feats.to(device)
+#     if len(neg_edges) > 0:
+#         #neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
+#         neg_edge_index = torch.cat(neg_edges, dim=1)
+#     target_edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1).to(device)
+#     target_edge_attr = target_edge_attr.to(device)
+#     return node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr
 
 def train_lp(loader, epoc, encoder, model, lp_decoder, optimizer, scheduler) -> float:
     encoder.train()
@@ -240,8 +228,13 @@ def train_lp(loader, epoc, encoder, model, lp_decoder, optimizer, scheduler) -> 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
-            tf = tf.to(device)
+            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, num_neg_samples)
+            node_feats = node_feats.to(device)
+            input_edge_index = input_edge_index.to(device)
+            input_edge_attr = input_edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
 
@@ -286,10 +279,15 @@ def eval_lp(loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> flo
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, tensor_frame)
+            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, num_neg_samples)
+            node_feats = node_feats.to(device)
+            input_edge_index = input_edge_index.to(device)
+            input_edge_attr = input_edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
-
             pos_edge_attr = target_edge_attr[:batch_size,:]
             pos_edge_attr, _ = encoder(pos_edge_attr)
             pos_edge_attr = pos_edge_attr.view(-1, num_columns * channels) 
@@ -388,12 +386,6 @@ optimizer_grouped_parameters = [
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
 
-#train_lp = eval_lp(train_loader, model, lp_decoder, "tr")
-# val_lp = eval_lp(val_loader, model, lp_decoder, "val")
-# test_lp = eval_lp(test_loader, model, lp_decoder, "test")
-
-# Create a directory to save models
-#save_dir = '/mnt/data/.cache/saved_models'
 save_dir = '/takyildiz/scratch/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)

@@ -21,6 +21,7 @@ from src.nn.gnn.decoder import LinkPredHead
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
 from src.nn.weighting.MoCo import MoCoLoss
+from src.utils.batch_processing import mcm_inputs, lp_inputs
 
 from tqdm.auto import tqdm
 import wandb
@@ -46,114 +47,6 @@ num_numerical = num_categorical = num_columns = 0
 ssloss = ssmetric = None
 args = None
 
-def mcm_inputs(tf: TensorFrame, dataset):
-    batch_size = len(tf.y)
-    edges = tf.y[:,-3:]
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
-
-    edge_attr = dataset.tensor_frame.__getitem__(idx)
-
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0]
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
-
-    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-
-    drop_edge_ind = torch.tensor([x for x in range(batch_size)])
-    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
-    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    # input_edge_index = edge_index[:, ~mask]
-    # input_edge_attr  = edge_attr[~mask]
-    input_edge_index = edge_index
-    input_edge_attr  = edge_attr
-    target_edge_index = edge_index[:, mask]
-    target_edge_attr  = edge_attr[mask]
-    return node_feats.to(device), input_edge_index.to(device), input_edge_attr.to(device), target_edge_index.to(device), target_edge_attr.to(device)  
-    
-def lp_inputs(tf: TensorFrame, dataset):
-    edges = tf.y[:,-3:]
-    batch_size = len(edges)
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, 'train')
-    
-    edge_attr = dataset.tensor_frame.__getitem__(idx)
-
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0]
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
-
-    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-
-    drop_edge_ind = torch.tensor([x for x in range(int(batch_size))])
-    mask = torch.zeros((edge_index.shape[1],)).long() #[E, ]
-    mask = mask.index_fill_(dim=0, index=drop_edge_ind, value=1).bool() #[E, ]
-    input_edge_index = edge_index[:, ~mask]
-    input_edge_attr  = edge_attr[~mask]
-
-    pos_edge_index = edge_index[:, mask]
-    pos_edge_attr  = edge_attr[mask]
-
-    # generate/sample negative edges
-    neg_edges = []
-    target_dict = pos_edge_attr.feat_dict
-    for key, value in pos_edge_attr.feat_dict.items():
-        attr = []
-        # duplicate each row of the tensor by num_neg_samples times repeated values must be contiguous
-        for r in value:
-            if key == stype.timestamp:
-                attr.append(r.repeat(args["num_neg_samples"], 1, 1))
-            else:
-                attr.append(r.repeat(args["num_neg_samples"], 1))
-        target_dict[key] = torch.cat([target_dict[key], torch.cat(attr, dim=0)], dim=0)
-    target_edge_attr = TensorFrame(target_dict, pos_edge_attr.col_names_dict)
-
-    nodeset = set(range(edge_index.max()+1))
-    for i, edge in enumerate(pos_edge_index.t()):
-        src, dst = edge[0], edge[1]
-
-        # Create a mask of unavailable nodes
-        unavail_mask = torch.isin(edge_index.flatten(), torch.tensor([src, dst]))
-        unavail_nodes = edge_index.flatten()[unavail_mask].unique()
-        # Create a mask for all nodes
-        all_nodes = torch.arange(max(nodeset) + 1)
-        avail_mask = ~torch.isin(all_nodes, unavail_nodes)
-        # Get available nodes
-        avail_nodes = all_nodes[avail_mask]
-        # Randomly select negative samples from available nodes
-        neg_nodes = avail_nodes[torch.randint(high=len(avail_nodes), size=(args["num_neg_samples"],))]
-        
-        # Generate num_neg_samples/2 negative edges with the same source but different destinations
-        num_neg_samples_half = int(args["num_neg_samples"]/2)
-        neg_dsts = neg_nodes[:num_neg_samples_half]  # Selecting num_neg_samples/2 random destination nodes for the source
-        neg_edges_src = torch.stack([src.repeat(num_neg_samples_half), neg_dsts], dim=0)
-        
-        # Generate num_neg_samples/2 negative edges with the same destination but different sources
-        neg_srcs = neg_nodes[num_neg_samples_half:]  # Selecting num_neg_samples/2 random source nodes for the destination
-        neg_edges_dst = torch.stack([neg_srcs, dst.repeat(num_neg_samples_half)], dim=0)
-
-        # Add these negative edges to the list
-        neg_edges.append(neg_edges_src)
-        neg_edges.append(neg_edges_dst)
-    
-    edge_index = edge_index.to(device)
-    edge_attr = edge_attr.to(device)
-    input_edge_index = input_edge_index.to(device)
-    input_edge_attr = input_edge_attr.to(device)
-    #pos_edge_index = pos_edge_index.to(device)
-    #pos_edge_attr = pos_edge_attr.to(device)
-    node_feats = node_feats.to(device)
-    if len(neg_edges) > 0:
-        #neg_edge_index = torch.cat(neg_edges, dim=1).to(device)
-        neg_edge_index = torch.cat(neg_edges, dim=1)
-    target_edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1).to(device)
-    target_edge_attr = target_edge_attr.to(device)
-    return node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr
-
 def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
@@ -161,8 +54,13 @@ def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer
 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset)
-            tf = tf.to(device)
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, 'train')
+            node_feats = node_feats.to(device)
+            edge_index = edge_index.to(device)
+            edge_attr = edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+
             edge_attr, _ = encoder(edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
             x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr)
@@ -197,11 +95,16 @@ def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, _, _, edge_index, edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-            tf = tf.to(device)
-            edge_attr, _ = encoder(edge_attr)
+            node_feats, _, _, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
+            node_feats = node_feats.to(device)
+            neigh_edge_index = neigh_edge_index.to(device)
+            neigh_edge_attr = neigh_edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+
+            neigh_edge_attr, _ = encoder(neigh_edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
-            x_gnn, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr, True)
+            x_gnn, _, target_edge_attr = model(node_feats, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr, True)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr[:batch_size,:]
@@ -221,7 +124,7 @@ def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, 
     return {'loss': loss_lp_accum / total_count} 
 
 @torch.no_grad()
-def eval_mcm(dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
+def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
     encoder.eval()
     model.eval()
     mcm_decoder.eval()
@@ -232,7 +135,12 @@ def eval_mcm(dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_n
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset)
-            tf = tf.to(device)
+            node_feats = node_feats.to(device)
+            edge_index = edge_index.to(device)
+            edge_attr = edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+
             edge_attr, _ = encoder(edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
             x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr)
@@ -267,13 +175,14 @@ def eval_mcm(dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_n
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
+            "epoch": epoch,
             f"{dataset_name}_accuracy": accuracy,
             f"{dataset_name}_rmse": rmse,
         })
         return {"accuracy": accuracy, "rmse": rmse}
 
 @torch.no_grad()
-def eval_lp(dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> float:
+def eval_lp(epoch, dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> float:
     encoder.eval()
     model.eval()
     lp_decoder.eval()
@@ -288,11 +197,16 @@ def eval_lp(dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_nam
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-            tf = tf.to(device)
-            input_edge_attr, _ = encoder(input_edge_attr)
+            node_feats, _, _, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
+            node_feats = node_feats.to(device)
+            neigh_edge_index = neigh_edge_index.to(device)
+            neigh_edge_attr = neigh_edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+
+            neigh_edge_attr, _ = encoder(neigh_edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
-            x_gnn, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr, True)
+            x_gnn, _, target_edge_attr = model(node_feats, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr, True)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr[:batch_size,:]
@@ -318,15 +232,16 @@ def eval_lp(dataset, loader: DataLoader, encoder, model, lp_decoder, dataset_nam
                 hits10=f'{np.mean(hits10):.4f}',
                 loss_lp = f'{loss_lp_accum/total_count:.4f}',
             )
-        wandb.log({
-            f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
-        })
+            wandb.log({
+                f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
+            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
         hits5 = np.mean(hits5)
         hits10 = np.mean(hits10)
         wandb.log({
+            "epoch": epoch,
             f"{dataset_name}_mrr": mrr_score,
             f"{dataset_name}_hits@1": hits1,
             f"{dataset_name}_hits@2": hits2,
@@ -347,17 +262,25 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-            input_edge_attr, _ = encoder(input_edge_attr)
+            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
+            node_feats = node_feats.to(device)
+            neigh_edge_index = neigh_edge_index.to(device)
+            neigh_edge_attr = neigh_edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+            edge_index = edge_index.to(device)
+            edge_attr = edge_attr.to(device)
+            
+            edge_attr, _ = encoder(edge_attr)
+            neigh_edge_attr = edge_attr[batch_size:,:,:]
             target_edge_attr, _ = encoder(target_edge_attr)
-            x_gnn, _, target_edge_attr_lp = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr, True)
+            x_gnn, _, target_edge_attr_lp = model(node_feats, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr, True)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr_lp[:batch_size,:]
             neg_edge_attr = target_edge_attr_lp[batch_size:,:]
             pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 
-            edge_attr, _ = encoder(edge_attr)
             x_gnn, _, target_edge_attr_mcm = model(node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr)
             x_target = x_gnn[pos_edge_index.T].reshape(-1, 2 * args["channels"])#.relu()
             pos_edge_attr = target_edge_attr_mcm[:batch_size,:]
@@ -391,7 +314,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
     return {'loss': loss_accum / total_count} 
 
 @torch.no_grad()
-def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name):
+def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name):
     encoder.eval()
     model.eval()
     lp_decoder.eval()
@@ -409,17 +332,25 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-            input_edge_attr, _ = encoder(input_edge_attr)
+            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
+            node_feats = node_feats.to(device)
+            neigh_edge_index = neigh_edge_index.to(device)
+            neigh_edge_attr = neigh_edge_attr.to(device)
+            target_edge_index = target_edge_index.to(device)
+            target_edge_attr = target_edge_attr.to(device)
+            edge_index = edge_index.to(device)
+            edge_attr = edge_attr.to(device)
+            
+            edge_attr, _ = encoder(edge_attr)
+            neigh_edge_attr = edge_attr[batch_size:,:,:]
             target_edge_attr, _ = encoder(target_edge_attr)
-            x_gnn, _, target_edge_attr_lp = model(node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr, True)
+            x_gnn, _, target_edge_attr_lp = model(node_feats, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr, True)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr_lp[:batch_size,:]
             neg_edge_attr = target_edge_attr_lp[batch_size:,:]
             pos_pred, neg_pred = lp_decoder(x_gnn, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 
-            edge_attr, _ = encoder(edge_attr)
             x_gnn, _, target_edge_attr_mcm = model(node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr)
             x_target = x_gnn[pos_edge_index.T].reshape(-1, 2 * args["channels"])#.relu()
             pos_edge_attr = target_edge_attr_mcm[:batch_size,:]
@@ -473,6 +404,7 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
+            "epoch": epoch,
             f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
             f"{dataset_name}_loss_c": loss_c_accum/t_c,
             f"{dataset_name}_loss_n": loss_n_accum/t_n,
@@ -755,25 +687,25 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
         if mode == "mcm-lp":
             loss = train(dataset, train_loader, epoch, encoder, model, lp_decoder, mcm_decoder, optimizer, scheduler, moo)
             logger.info(f"loss: {loss}")
-            val_lp, val_mcm = eval(dataset, val_loader, encoder, model, lp_decoder, mcm_decoder, "val")
+            val_lp, val_mcm = eval(epoch, dataset, val_loader, encoder, model, lp_decoder, mcm_decoder, "val")
             logger.info(f"val_mcm: {val_mcm}")
             logger.info(f"val_lp: {val_lp}")
-            test_lp, test_mcm = eval(dataset, test_loader, encoder, model, lp_decoder, mcm_decoder, "test")
+            test_lp, test_mcm = eval(epoch, dataset, test_loader, encoder, model, lp_decoder, mcm_decoder, "test")
             logger.info(f"test_mcm: {test_mcm}")
             logger.info(f"test_lp: {test_lp}")
         elif mode == "mcm":
             mcm_loss = train_mcm(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
             logger.info(f"loss_mcm: {mcm_loss}")
-            val_mcm = eval_mcm(dataset, val_loader, encoder, model, mcm_decoder, "val")
+            val_mcm = eval_mcm(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
             logger.info(f"val_mcm: {val_mcm}")
-            test_mcm = eval_mcm(dataset, test_loader, encoder, model, mcm_decoder, "test")
+            test_mcm = eval_mcm(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
             logger.info(f"test_mcm: {test_mcm}")
         elif mode == "lp":
             lp_loss = train_lp(dataset, train_loader, epoch, encoder, model, lp_decoder, optimizer, scheduler)
             logger.info(f"loss_lp: {lp_loss}")
-            val_lp = eval_lp(dataset, val_loader, encoder, model, lp_decoder, "val")
+            val_lp = eval_lp(epoch, dataset, val_loader, encoder, model, lp_decoder, "val")
             logger.info(f"val_lp: {val_lp}")
-            test_lp = eval_lp(dataset, test_loader, encoder, model, lp_decoder, "test")
+            test_lp = eval_lp(epoch, dataset, test_loader, encoder, model, lp_decoder, "test")
             logger.info(f"test_lp: {test_lp}")
 
         if mode == "mcm-lp" or mode == "mcm":            
