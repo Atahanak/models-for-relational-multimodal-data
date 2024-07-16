@@ -71,18 +71,19 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                'From Bank': torch_frame.categorical,
-                'To Bank': torch_frame.categorical,
-                'Payment Currency': torch_frame.categorical,
+                # 'From Bank': torch_frame.categorical,
+                # 'To Bank': torch_frame.categorical,
+                # 'Payment Currency': torch_frame.categorical,
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
                 'Timestamp': torch_frame.timestamp,
-                'Amount Paid': torch_frame.numerical,
-                #'Amount Received': torch_frame.numerical
+                # 'Amount Paid': torch_frame.numerical,
+                'Amount Received': torch_frame.numerical
             }
             #num_columns = ['Amount Received', 'Amount Paid']
-            num_columns = ['Amount Paid']
-            cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            num_columns = ['Amount Received']
+            cat_columns = ['Receiving Currency', 'Payment Format']
+            # cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
@@ -119,8 +120,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             -------
             pd.DataFrame
                 Sampled edge data
+
+                data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
+                sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
-            edges = torch.tensor(edges, dtype=torch.int)  # Convert edges to a PyTorch tensor of integers
+            edges = edges.to(torch.int)  # Convert edges to a PyTorch tensor of integers
             row = edges[:, 0]
             col = edges[:, 1]
             idx = edges[:, 2] 
@@ -128,7 +132,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # col = [int(edge[1]) for edge in edges]
             # idx = [int(edge[2]) for edge in edges]
 
-            input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
+            input = EdgeSamplerInput(None, row.to(torch.long), col.to(torch.long))
+            # input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
             
             if mode == 'train':
                 out = self.sampler.sample_from_edges(input)
