@@ -1,12 +1,14 @@
 #!/bin/bash
 
-#SBATCH --job-name="fused mcm lp mv"
-#SBATCH --time=01:00:00
-#SBATCH --ntasks=1
-#SBATCH --gpus-per-task=1
+#SBATCH --job-name="tg2fmoco"
+#SBATCH --time=72:00:00
 #SBATCH --partition=gpu-a100
-#SBATCH --mem-per-cpu=30GB
-#SBATCH --account=education-eemcs-courses-cse3000
+#SBATCH --gres=gpu:1
+#SBATCH --gpu-bind=none
+#SBATCH --ntasks=3
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=8GB
+#SBATCH --account=research-eemcs-st
 #SBATCH --output=./%j.out # standard output of the job will be printed here
 #SBATCH --error=./%j.err # standard error of the job will be printed here
 
@@ -20,7 +22,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/cse3000/fused_mcm_mv_lp.py
+srun python /home/$USER/models-for-relational-multimodal-data/tabular-gnn2.py
 
 conda deactivate
 

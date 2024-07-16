@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name="tg"
+#SBATCH --job-name="tglp"
 #SBATCH --time=72:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-v100
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --gpu-bind=none
@@ -23,8 +23,8 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-#srun python /home/$USER/models-for-relational-multimodal-data/tabular-gnn-p.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group LI-Small,tabgnn,mcm-lp,sum --run_name LI-Small,tabgnn,mcm-lp,sum
-srun python /home/$USER/models-for-relational-multimodal-data/tabular-gnn-p.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group HI-Small,tabgnn,mcm-lp,sum --run_name HI-Small,tabgnn,mcm-lp,sum
+#srun python /home/$USER/models-for-relational-multimodal-data/tabular-gnn-p.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --mode lp --pretrain [lp] --group LI-Small,tabgnn,lp --run_name LI-Small,tabgnn,lp 
+srun python /home/$USER/models-for-relational-multimodal-data/tabular-gnn-p.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --mode lp --pretrain [lp] --group HI-Small,tabgnn,lp --run_name HI-Small,tabgnn,lp 
 
 conda deactivate
 
