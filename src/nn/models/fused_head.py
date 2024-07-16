@@ -85,9 +85,6 @@ class TABGNNFusedHead(Module):
         stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
         encoder: StypeWiseFeatureEncoder = None,
         
-        # training parameters
-        pretrain: set[PretrainType] = False,
-
         # PNA parameters
         deg=None,
         node_dim: int = 1,
@@ -106,10 +103,11 @@ class TABGNNFusedHead(Module):
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
         
-        self.pretrain = pretrain
         self.channels = channels
         self.nhidden = nhidden
-        self.edge_dim = edge_dim
+        self.node_dim = node_dim
+        self.edge_dim = edge_dim + self.channels
+        self.fused_dim = channels + 2*nhidden
         
         if encoder is None:
             if stype_encoder_dict is None:
@@ -132,8 +130,8 @@ class TABGNNFusedHead(Module):
         self.cls_embedding = Parameter(torch.empty(channels))
         
         # PNA
-        self.node_emb = Linear(node_dim, nhidden)
-        #self.edge_emb = Linear(edge_dim, nhidden)
+        self.node_emb = Linear(self.node_dim, nhidden)
+        self.edge_emb = Linear(self.edge_dim, nhidden)
         self.tab_conv = TransformerEncoderLayer(
             d_model=channels,
             nhead=nhead,
@@ -148,7 +146,7 @@ class TABGNNFusedHead(Module):
 
         #backbone
         self.backbone = ModuleList()
-        for i in range(num_layers-1):
+        for i in range(num_layers):
             self.backbone.append(
                 ParallelLayer(
                     channels, 
@@ -161,23 +159,22 @@ class TABGNNFusedHead(Module):
                     deg
                 )
             )
-        
-        self.fuse = FusedLayer(
-                channels, 
-                nhead, 
-                feedforward_channels, 
-                dropout, 
-                activation, 
-                nhidden,
-                final_dropout,
-                deg
+
+        self.fuse = Sequential(
+            LayerNorm(self.fused_dim),
+            Linear(self.fused_dim, 4*self.fused_dim), 
+            LeakyReLU(), Dropout(final_dropout), 
+            Linear(4*self.fused_dim, 4*self.fused_dim), LeakyReLU(), 
+            Dropout(final_dropout),
+            Linear(4*self.fused_dim, self.fused_dim)
         )
+        self.fuse_norm = LayerNorm(self.fused_dim)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         torch.nn.init.normal_(self.cls_embedding, std=0.01)
         self.node_emb.reset_parameters()
-        #self.edge_emb.reset_parameters()
+        self.edge_emb.reset_parameters()
         self.tab_norm.reset_parameters()
         for p in self.tab_conv.parameters():
             if p.dim() > 1:
@@ -185,15 +182,19 @@ class TABGNNFusedHead(Module):
         self.encoder.reset_parameters()
         for layer in self.backbone:
             layer.reset_parameters()
-        #self.decoder.reset_parameters()
+        self.fuse_norm.reset_parameters()
+        for p in self.fuse.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
     def get_shared_params(self):
         param_groups = [
             self.encoder.parameters(),
             [self.cls_embedding],  # Wrap single parameters in a list
             self.node_emb.parameters(),
-            #self.edge_emb.parameters(),
+            self.edge_emb.parameters(),
             self.backbone[:-1].parameters(),
+            self.fuse.parameters(),
         ]
         
         # Flatten the param groups into a single list
@@ -225,94 +226,23 @@ class TABGNNFusedHead(Module):
         x_tab = torch.cat([x_cls, target_edge_attr], dim=1)
 
         edge_attr, _ = self.encoder(edge_attr)
-        # edge_attr = edge_attr.view(-1, self.edge_dim)
-        # edge_attr = self.edge_emb(edge_attr)
         x_edge = self.cls_embedding.repeat(edge_index.shape[1], 1, 1)
         edge_attr = torch.cat([x_edge, edge_attr], dim=1)
-        edge_attr = self.tab_norm(self.tab_conv(edge_attr))
-        edge_attr, _ = edge_attr[:, 0, :], edge_attr[:, 1:, :]
-
+        edge_attr = (edge_attr + self.tab_norm(self.tab_conv(edge_attr))) / 2
+        edge_attr = edge_attr.view(-1, self.edge_dim)
+        edge_attr = self.edge_emb(edge_attr)
+        
+        target_attr = x_tab
         for layer in self.backbone:
             x_tab, x_gnn = layer(x_tab, x_gnn, edge_index, edge_attr)
-        emb = self.fuse(x_tab, x_gnn, edge_index, edge_attr, target_edge_index) 
+        
+        x_tab = (x_tab + target_attr) / 2
+        target_edge_attr = x_tab.view(-1, self.edge_dim)
+        target_edge_attr = self.edge_emb(target_edge_attr)
+        x = torch.cat([target_edge_attr, x_gnn[target_edge_index[0]], x_gnn[target_edge_index[1]]], dim=-1)
+        emb = (x + self.fuse_norm(self.fuse(x)))/2 
         return emb
 
-class FusedLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
-        super().__init__()
-        self.channels = channels
-        self.nhidden = nhidden
-        #fused_dim = channels + nhidden
-        fused_dim = channels + 2*nhidden
-
-        # fttransformer
-        self.tab_conv = TransformerEncoderLayer(
-            d_model=channels,
-            nhead=nhead,
-            dim_feedforward=feedforward_channels or channels,
-            dropout=dropout,
-            activation=activation,
-            # Input and output tensors are provided as
-            # [batch_size, seq_len, channels]
-            batch_first=True,
-        )
-        self.tab_norm = LayerNorm(channels)
-
-        # PNA
-        aggregators = ['mean', 'max', 'min', 'std']
-        scalers = ['identity', 'amplification', 'attenuation']
-
-        self.gnn_conv = PNAConv(in_channels=nhidden, 
-                                out_channels=nhidden, 
-                                aggregators=aggregators, 
-                                scalers=scalers, 
-                                edge_dim=nhidden, 
-                                deg=deg)
-        self.gnn_norm = BatchNorm(nhidden)
-        self.gnn_edge_update = Sequential(
-                Linear(3 * self.nhidden, self.nhidden),
-                ReLU(),
-                Linear(self.nhidden, self.nhidden),
-        )
-
-        # fuse
-        self.fuse = Sequential(
-            LayerNorm(fused_dim),
-            Linear(fused_dim, 4*fused_dim), 
-            LeakyReLU(), Dropout(final_dropout), 
-            Linear(4*fused_dim, 4*fused_dim), LeakyReLU(), 
-            Dropout(final_dropout),
-            Linear(4*fused_dim, fused_dim)
-        )
-        self.fuse_norm = LayerNorm(fused_dim)
-        self.reset_parameters()
-    
-    def reset_parameters(self):
-        for p in self.tab_conv.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
-        self.tab_norm.reset_parameters()
-        self.gnn_conv.reset_parameters()
-        for p in self.gnn_edge_update.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
-        self.gnn_norm.reset_parameters()
-        for p in self.fuse.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
-
-    def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index):
-        x_tab = self.tab_norm(self.tab_conv(x_tab))
-        x_tab_cls, _ = x_tab[:, 0, :], x_tab[:, 1:, :]
-
-        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-        src, dst = edge_index
-        edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
-
-        x = torch.cat([x_tab_cls, x_gnn[target_edge_index[0]], x_gnn[target_edge_index[1]]], dim=-1)
-        x = (x + self.fuse_norm(self.fuse(x))) / 2
-        return x
-    
 class ParallelLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.2, activation: str = 'relu', nhidden: int = 128, final_dropout: float = 0.5, deg=None):
         super().__init__()
@@ -363,7 +293,7 @@ class ParallelLayer(Module):
                 torch.nn.init.xavier_uniform_(p)
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr):
-        x_tab = self.tab_norm(self.tab_conv(x_tab))
+        x_tab = (x_tab + self.tab_norm(self.tab_conv(x_tab)) / 2)
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
         src, dst = edge_index
         edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
