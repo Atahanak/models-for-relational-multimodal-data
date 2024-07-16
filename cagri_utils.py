@@ -2,7 +2,7 @@ import os
 import logging
 import sys
 import argparse
-import tqdm
+from tqdm import tqdm
 from datetime import datetime
 import os 
 import os.path as osp 
@@ -34,15 +34,8 @@ def logger_setup():
 def create_parser():
     parser = argparse.ArgumentParser()
 
-    #Adaptations
-    parser.add_argument("--emlps", action='store_true', help="Use emlps in GNN training")
-    parser.add_argument("--reverse_mp", action='store_true', help="Use reverse MP in GNN training")
-    parser.add_argument("--ports", action='store_true', help="Use port numberings in GNN training")
-    parser.add_argument("--tds", action='store_true', help="Use time deltas (i.e. the time between subsequent transactions) in GNN training")
-    parser.add_argument("--ego", action='store_true', help="Use ego IDs in GNN training")
-
     #Model parameters
-    parser.add_argument("--batch_size", default=8192, type=int, help="Select the batch size for GNN training")
+    parser.add_argument("--batch_size", default=200, type=int, help="Select the batch size for GNN training")
     parser.add_argument("--n_epochs", default=100, type=int, help="Select the number of epochs for GNN training")
     parser.add_argument('--num_neighs', nargs='+', default=[100,100], help='Pass the number of neighors to be sampled in each hop (descending).')
 
@@ -51,12 +44,9 @@ def create_parser():
     parser.add_argument("--tqdm", action='store_true', help="Use tqdm logging (when running interactively in terminal)")
     parser.add_argument("--data", default=None, type=str, help="Select the AML dataset. Needs to be either small or medium.", required=True)
     parser.add_argument("--model", default=None, type=str, help="Select the model architecture. Needs to be one of [gin, gat, rgcn, pna]", required=True)
-    parser.add_argument("--output_path", default="./outputs", type=str, help="Output path to save the best models", required=True)
+    parser.add_argument("--output_path", default="./outputs", type=str, help="Output path to save the best models", required=False)
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
-    parser.add_argument("--unique_name", action='store_true', help="Unique name under which the model will be stored.")
-    parser.add_argument("--finetune", action='store_true', help="Fine-tune a model. Note that args.unique_name needs to point to the pre-trained model.")
-    parser.add_argument("--inference", action='store_true', help="Load a trained model and only do AML inference with it. args.unique name needs to point to the trained model.")
 
     return parser
 
@@ -87,11 +77,11 @@ def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
     '''Evaluates the model performance '''
     preds = []
     ground_truths = []
-    for batch in tqdm.tqdm(loader, disable=not args.tqdm):
+    for batch in tqdm(loader, disable=not args.tqdm):
         #select the seed edges from which the batch was created
-        batch.to(device)
         batch_size = len(batch.y)
         node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode=mode)
+        node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
             pred = model(node_feats, edge_index, edge_attr)[:batch_size]
             preds.append(pred.argmax(dim=-1))
@@ -113,7 +103,7 @@ def save_model(model, optimizer, epoch, config, ):
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()
                 },
-            osp.join(config.experiment_path, epoch+ '.tar')
+            osp.join(config.experiment_path, str(epoch)+ '.tar')
             )
     
 

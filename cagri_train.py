@@ -1,6 +1,6 @@
 import logging
 import wandb
-import tqdm
+from tqdm import tqdm as tqdm
 
 from torch_frame.data import DataLoader
 from torch_frame import stype
@@ -23,7 +23,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #define a model config dictionary and wandb logging at the same time
 wandb.init(
     mode="disabled" if args.testing else "online",
-    project="tab-gnn", #replace this with your wandb project name if you want to use wandb logging
+    project="rel-mm-supervised", #replace this with your wandb project name if you want to use wandb logging
 
     config={
         "epochs": args.n_epochs,
@@ -32,14 +32,14 @@ wandb.init(
         "data": args.data,
         "output_path" : args.output_path,
         "num_neighbors": args.num_neighs,
-        "lr": 0.006213266113989207,
+        "lr": 5e-4,
         "n_feats" : 1, 
-        "n_hidden": 128,
-        "n_gnn_layers": 3,
+        "n_hidden": 64,
+        "n_gnn_layers": 2,
         "n_classes" : 2,
         "loss": "ce",
-        "w_ce1": 1.0000182882773443,
-        "w_ce2": 6.275014431494497,
+        "w_ce1": 1.,
+        "w_ce2": 500.,
         "dropout": 0.10527690625126304,
     }
 )
@@ -85,8 +85,8 @@ model = SupervisedTabGNN(
             dataset.col_stats, 
             dataset.tensor_frame.col_names_dict, 
             stype_encoder_dict, 
-            config)
-loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]))
+            config).to(device)
+loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
 optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
 
 
@@ -97,34 +97,37 @@ for epoch in range(config.epochs):
     preds = []
     ground_truths = []
 
-    for batch in tqdm.tqdm(train_loader, disable=not args.tqdm):
-        optimizer.zero_grad()
+    for batch in train_loader:
 
+        optimizer.zero_grad()
         batch_size = len(batch.y)
+
         node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode='train')
+        node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
+
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
 
         preds.append(pred.argmax(dim=-1))
         ground_truths.append(y)
         loss = loss_fn(pred, y.to(torch.long))
-
+        
         loss.backward()
         optimizer.step()
 
-        total_loss += float(loss) * pred.numel()
+        total_loss += loss.item() * pred.numel()
         total_examples += pred.numel()
-        print("Loss: ", loss.item())
-
+            
     pred = torch.cat(preds, dim=0).detach().cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).detach().cpu().numpy()
     f1 = f1_score(ground_truth, pred)
     wandb.log({"f1/train": f1}, step=epoch)
-    logging.info(f'Train F1: {f1:.4f}')
-
+    wandb.log({"Loss": total_loss/total_examples}, step=epoch)
+    logging.info(f'Train F1: {f1:.4f}, Epoch: {epoch}')
+    logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
 
     #evaluate
-    val_f1 = evaluate(val_loader, dataset, tensor_frame, model, 'cpu', args, 'val')
-    te_f1 = evaluate(test_loader, dataset, tensor_frame, model, 'cpu', args, 'test')
+    val_f1 = evaluate(val_loader, dataset, tensor_frame, model, device, args, 'val')
+    te_f1 = evaluate(test_loader, dataset, tensor_frame, model, device, args, 'test')
 
     wandb.log({"f1/validation": val_f1}, step=epoch)
     wandb.log({"f1/test": te_f1}, step=epoch)
