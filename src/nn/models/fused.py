@@ -115,45 +115,19 @@ class TABGNNFused(Module):
         )
         self.tab_norm = LayerNorm(channels)
 
-        #backbone
         self.backbone = ModuleList()
-        # for i in range(num_layers):
-        #     #if i == (num_layers - 1):
-        #     if True:
-        #         self.backbone.append(
-        #             FTTransformerPNAParallelLayer(
-        #                 channels, 
-        #                 nhead, 
-        #                 feedforward_channels, 
-        #                 dropout, 
-        #                 activation, 
-        #                 nhidden,
-        #                 deg
-        #             )
-        #         )
-        #     else:
-        #         self.backbone.append(
-        #             FTTransformerPNAFusedLayer(
-        #                 channels, 
-        #                 nhead, 
-        #                 feedforward_channels, 
-        #                 dropout, 
-        #                 activation, 
-        #                 nhidden,
-        #                 deg
-        #             )
-        #         )
-        self.backbone.append(
-            FTTransformerPNAFusedLayer(
-                channels, 
-                nhead, 
-                feedforward_channels, 
-                dropout, 
-                activation, 
-                nhidden,
-                deg
+        for i in range(num_layers):
+            self.backbone.append(
+                FTTransformerPNAFusedLayer(
+                    channels, 
+                    nhead, 
+                    feedforward_channels, 
+                    dropout, 
+                    activation, 
+                    nhidden,
+                    deg
+                )
             )
-        )
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -174,7 +148,7 @@ class TABGNNFused(Module):
             [self.cls_embedding],  # Wrap single parameters in a list
             self.node_emb.parameters(),
             self.edge_emb.parameters(),
-            self.backbone[:-1].parameters(),
+            self.backbone.parameters(),
         ]
         
         # Flatten the param groups into a single list
@@ -211,6 +185,7 @@ class TABGNNFused(Module):
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
+        x_tab = target_edge_attr
         for layer in self.backbone:
             x_tab, x_gnn, edge_attr = layer(x_tab, x_gnn, edge_index, edge_attr, target_edge_index, lp)
         
@@ -278,13 +253,14 @@ class FTTransformerPNAFusedLayer(Module):
                 torch.nn.init.xavier_uniform_(p)
         self.tab_norm.reset_parameters()
         self.gnn_conv.reset_parameters()
-        # for p in self.edge.parameters():
-        #     if p.dim() > 1:
-        #         torch.nn.init.xavier_uniform_(p)
         self.gnn_norm.reset_parameters()
+        for p in self.gnn_edge_update.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
         for p in self.fuse.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
+        self.fuse_norm.reset_parameters()
 
     def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index, lp=False):
         x_tab = (x_tab + self.tab_norm(self.tab_conv(x_tab)) / 2)
@@ -292,7 +268,7 @@ class FTTransformerPNAFusedLayer(Module):
 
         x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
         src, dst = edge_index
-        edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
+        edge_attr = (edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1))) / 2
 
         if not lp: # pool fused node embeddings
             x = torch.cat([x_tab_cls, x_gnn[target_edge_index[0]], x_gnn[target_edge_index[1]]], dim=-1)
@@ -362,6 +338,6 @@ class FTTransformerPNAParallelLayer(Module):
        x_tab = (x_tab + self.tab_norm(self.tab_conv(x_tab)) / 2)
        x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
        src, dst = edge_index
-       edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
+       edge_attr = (edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1))) / 2
        return x_tab, x_gnn, edge_attr
 
