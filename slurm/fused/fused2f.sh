@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name="tg2f"
+#SBATCH --job-name="fu-2f"
 #SBATCH --time=96:00:00
 #SBATCH --partition=gpu-a100
 #SBATCH --gres=gpu:1

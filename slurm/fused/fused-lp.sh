@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name="tglp"
+#SBATCH --job-name="fu-lp"
 #SBATCH --time=96:00:00
-#SBATCH --partition=gpu-v100
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --gpu-bind=none
@@ -23,8 +23,8 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --mode lp --pretrain [lp] --group LI-Small,fused,lp --run_name LI-Small,fused,lp 
-srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --mode lp --pretrain [lp] --group HI-Small,fused,lp --run_name HI-Small,fused,lp 
+srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --mode lp --pretrain [lp] --group LI-Small,fused,lp --run_name LI-Small,fused,lp --epochs 30
+srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --mode lp --pretrain [lp] --group HI-Small,fused,lp --run_name HI-Small,fused,lp --epochs 30
 
 conda deactivate
 

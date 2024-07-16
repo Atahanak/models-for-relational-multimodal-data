@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name="tg"
+#SBATCH --job-name="fu"
 #SBATCH --time=96:00:00
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
@@ -23,8 +23,8 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group LI-Small,fused,mcm-lp,sum --run_name LI-Small,fused,mcm-lp,sum
-srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group HI-Small,fused,mcm-lp,sum --run_name HI-Small,fused,mcm-lp,sum
+srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group LI-Small,fused,mcm-lp,sum --run_name LI-Small,fused,mcm-lp,sum --epochs 30
+srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group HI-Small,fused,mcm-lp,sum --run_name HI-Small,fused,mcm-lp,sum --epochs 30
 
 conda deactivate
 
