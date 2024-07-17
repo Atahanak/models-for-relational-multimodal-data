@@ -86,10 +86,12 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
     elif PretrainType.MASK in pretrain:
         # Handles combinations of {MCM+MV} and {MCM}
         self.target_col = 'mask'
-        del col_to_stype['link']
+        if 'link' in col_to_stype:
+            del col_to_stype['link']
     elif PretrainType.LINK_PRED in pretrain:
         self.target_col = 'link'
-        del col_to_stype['mask']
+        if 'mask' in col_to_stype:
+            del col_to_stype['mask']
     else:
         self.target_col = ''
     return col_to_stype
