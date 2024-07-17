@@ -2,12 +2,12 @@
 
 #SBATCH --job-name="fu"
 #SBATCH --time=96:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-a100
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --gpu-bind=none
-#SBATCH --ntasks=3
-#SBATCH --cpus-per-task=4
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=8GB
 #SBATCH --account=research-eemcs-st
 #SBATCH --output=./%j.out # standard output of the job will be printed here
