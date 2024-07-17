@@ -16,6 +16,20 @@ import numpy as np
 from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, create_mask
 from .util.split import apply_split
 
+import time
+
+import logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set the logging level
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Specify the log message format
+    datefmt='%Y-%m-%d %H:%M:%S',  # Specify the date format
+    handlers=[
+        #logging.FileHandler('app.log'),  # Log messages to a file
+        logging.StreamHandler()  # Also output log messages to the console
+    ]
+)
+logger = logging.getLogger(__name__)
+
 class IBMTransactionsAML(torch_frame.data.Dataset):
         r"""`"Realistic Synthetic Financial Transactions for Anti-Money Laundering Models" https://arxiv.org/pdf/2306.16424.pdf`_.
         
@@ -86,15 +100,20 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
-
+            
+            logger.info(f'Creating graph...')
+            start = time.time()
             col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
+            logger.info(f'Graph created in {time.time()-start} seconds.')
 
             # Apply input corruption
             if PretrainType.MASK in pretrain:
-                mask = create_mask(self, num_columns + cat_columns, masked_dir)
-                self.df["maskable_column"] = mask
+                logger.info(f'Applying mask...')
+                start = time.time()
+                # mask = create_mask(self, num_columns + cat_columns)
+                # self.df["maskable_column"] = mask
                 col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
-                self.df = self.df.drop('maskable_column', axis=1)
+                logger.info(f'Mask applied in {time.time()-start} seconds.')
 
             # Define target column to predict
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
@@ -127,7 +146,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             # row = [int(edge[0]) for edge in edges]
             # col = [int(edge[1]) for edge in edges]
             # idx = [int(edge[2]) for edge in edges]
-
+            #start = time.time()
             input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
             out = self.sampler.sample_from_edges(input)
             
@@ -167,6 +186,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 col = torch.cat([col, self.edges[new_edges, 1]])
                 idx = torch.cat([idx, new_edges])
 
+            #logger.info(f"EdgeSamplerInput created in {time.time()-start} seconds.")
             return row, col, idx
         
         def get_encoder(self, channels):
