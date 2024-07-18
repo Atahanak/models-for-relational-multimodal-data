@@ -66,7 +66,7 @@ num_layers = 3
 dropout = 0.5
 
 pretrain = {PretrainType.LINK_PRED}
-testing = False
+testing = True
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = {
@@ -96,8 +96,8 @@ run = wandb.init(
     dir="/takyildiz/scratch/",
     mode="disabled" if args['testing'] else "online",
     project=f"exp", 
-    name=f"PNA",
-    group=f"pna,lp",
+    name=f"HM,pna,lp",
+    group=f"HM,pna,lp",
     entity="cse3000",
     #name=f"debug-fused",
     config=args
@@ -105,7 +105,7 @@ run = wandb.init(
 
 dataset = IBMTransactionsAML(
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Medium_Trans-c.csv', # if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain={PretrainType.LINK_PRED},
     mask_type="replace",
     split_type=split_type, 
@@ -228,7 +228,7 @@ def train_lp(loader, epoc, encoder, model, lp_decoder, optimizer, scheduler) -> 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, num_neg_samples)
+            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, num_neg_samples)
             node_feats = node_feats.to(device)
             input_edge_index = input_edge_index.to(device)
             input_edge_attr = input_edge_attr.to(device)
@@ -279,7 +279,7 @@ def eval_lp(loader: DataLoader, encoder, model, lp_decoder, dataset_name) -> flo
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, num_neg_samples)
+            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, num_neg_samples)
             node_feats = node_feats.to(device)
             input_edge_index = input_edge_index.to(device)
             input_edge_attr = input_edge_attr.to(device)
@@ -387,6 +387,7 @@ optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
 scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=2*lr, step_size_up=2000, cycle_momentum=False)
 
 save_dir = '/takyildiz/scratch/saved_models'
+#save_dir = '/mnt/data/saved_models'
 run_id = wandb.run.id
 os.makedirs(save_dir, exist_ok=True)
 best_lp = 0
