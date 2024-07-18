@@ -32,14 +32,16 @@ wandb.init(
         "data": args.data,
         "output_path" : args.output_path,
         "num_neighbors": args.num_neighs,
+        "emlps": args.emlps, 
+        "reverse_mp": args.reverse_mp,
+        "ego": args.ego,
         "lr": 5e-4,
-        "n_feats" : 1, 
         "n_hidden": 64,
         "n_gnn_layers": 2,
         "n_classes" : 2,
         "loss": "ce",
         "w_ce1": 1.,
-        "w_ce2": 500.,
+        "w_ce2": 6.,
         "dropout": 0.10527690625126304,
     }
 )
@@ -102,7 +104,7 @@ for epoch in range(config.epochs):
         optimizer.zero_grad()
         batch_size = len(batch.y)
 
-        node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode='train')
+        node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
 
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]

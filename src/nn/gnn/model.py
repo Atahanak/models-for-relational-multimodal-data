@@ -3,8 +3,38 @@ import torch.nn as nn
 from torch_geometric.nn import GINEConv, BatchNorm, Linear, PNAConv
 import torch.nn.functional as F
 import torch
+from torch_geometric.nn import MessagePassing
 
-from .decoder import LinkPredHead
+from typing import Optional, Union
+
+import torch
+from torch import Tensor
+
+from torch_geometric.nn.dense.linear import Linear
+from torch_geometric.nn.inits import reset
+from torch_geometric.typing import (
+    Adj,
+    OptPairTensor,
+    OptTensor,
+    Size,
+)
+
+class GINEConvHetero(nn.Module):
+    def __init__(self, network, n_hidden):
+        super().__init__()
+        self.conv_forw = GINEConv(network, edge_dim=n_hidden)
+        self.conv_back = GINEConv(network, edge_dim=n_hidden)
+
+        self.lin = Linear(n_hidden*3, n_hidden)
+
+    def forward(self, x, edge_index, edge_attr):
+
+        edge_index_forw, edge_index_back = edge_index, edge_index.flipud()
+
+        a_in  = self.conv_forw((x, None), edge_index_forw, edge_attr)
+        a_out = self.conv_back((x, None), edge_index_back, edge_attr)
+
+        return self.lin(torch.cat([x, a_in, a_out], dim=1))
 
 
 class GINe(torch.nn.Module):
@@ -13,11 +43,13 @@ class GINe(torch.nn.Module):
                 num_gnn_layers=2,
                 n_hidden=100, 
                 edge_updates=False, 
-                edge_dim=None):
+                edge_dim=None,
+                reverse_mp=False):
         super().__init__()
         self.n_hidden = n_hidden
         self.num_gnn_layers = num_gnn_layers
         self.edge_updates = edge_updates
+        self.reverse_mp = reverse_mp
 
         self.node_emb = nn.Linear(num_features, n_hidden)
         self.edge_emb = nn.Linear(edge_dim, n_hidden)
@@ -26,11 +58,19 @@ class GINe(torch.nn.Module):
         self.emlps = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         for _ in range(self.num_gnn_layers):
-            conv = GINEConv(nn.Sequential(
-                nn.Linear(self.n_hidden, self.n_hidden), 
-                nn.ReLU(), 
-                nn.Linear(self.n_hidden, self.n_hidden)
-                ), edge_dim=self.n_hidden)
+            
+            if self.reverse_mp:
+                conv = GINEConvHetero(nn.Sequential(
+                    nn.Linear(self.n_hidden, self.n_hidden), 
+                    nn.ReLU(), 
+                    nn.Linear(self.n_hidden, self.n_hidden)
+                    ), n_hidden=self.n_hidden)
+            else:
+                conv = GINEConv(nn.Sequential(
+                    nn.Linear(self.n_hidden, self.n_hidden), 
+                    nn.ReLU(), 
+                    nn.Linear(self.n_hidden, self.n_hidden)
+                    ), edge_dim=self.n_hidden)
             if self.edge_updates: self.emlps.append(nn.Sequential(
                 nn.Linear(3 * self.n_hidden, self.n_hidden),
                 nn.ReLU(),
