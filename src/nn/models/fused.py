@@ -145,6 +145,8 @@ class TABGNNFused(Module):
     def get_shared_params(self):
         param_groups = [
             self.encoder.parameters(),
+            self.tab_conv.parameters(),
+            self.tab_norm.parameters(),
             [self.cls_embedding],  # Wrap single parameters in a list
             self.node_emb.parameters(),
             self.edge_emb.parameters(),
