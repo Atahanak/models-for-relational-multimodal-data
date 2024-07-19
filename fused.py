@@ -465,7 +465,7 @@ def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str],
         entity="cse3000",
         dir=wandb_dir,
         mode="disabled" if args['testing'] else "online",
-        project="rel-mm-fix",
+        project="exp",
         name=run_name,
         config=args,
         id=run_id if run_id is not None else None,    
@@ -659,6 +659,14 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
         decoders = [("mcm", mcm_decoder)]
     elif mode == "lp":
         decoders = [("lp", lp_decoder)]
+
+    # load decoders from checkpoint
+    if checkpoint is not None:
+        for name, decoder in decoders:
+            decoder_checkpoint = checkpoint.replace("run", name)
+            decoder.load_state_dict(torch.load(decoder_checkpoint, map_location=device))
+            logger.info(f"{name} loaded from {decoder_checkpoint}")
+
     optimizer = get_optimizer(encoder, model, decoders, lr, eps, weight_decay)
     scheduler = None
     global ssloss, ssmetric
@@ -731,10 +739,19 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
             model_save_path = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch}.pth')
             torch.save(model.state_dict(), model_save_path)
             logger.info(f'Checkpoint saved to {model_save_path}')
+            # save decoders
+            for name, decoder in decoders:
+                decoder_save_path = os.path.join(save_dir, f'{name}_{run_id}_epoch_{epoch}.pth')
+                torch.save(decoder.state_dict(), decoder_save_path)
+                logger.info(f'{name} saved to {decoder_save_path}')
             if epoch > 1:
                 rpath = os.path.join(save_dir, f'run_{run_id}_epoch_{epoch-1}.pth')
                 os.remove(rpath)
                 logger.info(f'Previous checkpoint removed: {rpath}')
+                for name, decoder in decoders:
+                    rpath = os.path.join(save_dir, f'{name}_{run_id}_epoch_{epoch-1}.pth')
+                    os.remove(rpath)
+                    logger.info(f'Previous {name} removed: {rpath}')
 
     wandb.finish()
 
