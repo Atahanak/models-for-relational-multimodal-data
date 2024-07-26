@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 from torch.special import expit
 
-
 class SSLoss:
     def __init__(self, device, num_numerical=None):
         self.num_numerical = num_numerical
@@ -13,7 +12,9 @@ class SSLoss:
         return -torch.log(pos_pred + 1e-12).mean() - torch.log(1 - neg_pred + 1e-12).mean()
 
     def mcm_loss(self, cat_out, num_out, y):
-        accum_n = accum_c = t_n = t_c = 0
+        accum_n = torch.tensor(0.0, dtype=torch.float32, device="cpu") 
+        accum_c = torch.tensor(0.0, dtype=torch.float32, device="cpu")
+        t_n = t_c = 0
         for i, ans in enumerate(y):
             # ans --> [val, idx]
             # pred --> feature_type_num X type_num X batch_size
@@ -21,10 +22,13 @@ class SSLoss:
                 t_c += 1
                 a = torch.tensor(int(ans[0]))#.to(self.device)
                 accum_c += F.cross_entropy(cat_out[int(ans[1]) - self.num_numerical][i], a)
-                del a
             else:
                 t_n += 1
                 accum_n += torch.square(num_out[i][int(ans[1])] - ans[0])  # mse
+                if torch.isnan(accum_n):
+                    print('accum_n is nan')
+                    print(num_out[i][int(ans[1])], ans[0])
+                    exit()
         if t_c == 0:
             return torch.sqrt(accum_n / t_n), (accum_c, t_c), (accum_n, t_n)
         elif t_n == 0:

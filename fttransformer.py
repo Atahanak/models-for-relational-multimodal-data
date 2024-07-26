@@ -18,7 +18,7 @@ from torch_frame import stype
 from torch_frame.data import DataLoader
 from torch_frame.data.stats import StatType
 
-from src.datasets import IBMTransactionsAML
+from src.datasets import IBMTransactionsAML, EthereumPhishingTransactions
 from src.nn.models.ft_transformer import FTTransformer
 from src.datasets.util.mask import PretrainType
 from src.nn.decoder import SelfSupervisedHead
@@ -135,12 +135,22 @@ def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], masked_d
     Returns:
         IBMTransactionsAML: The prepared dataset.
     """
-    dataset = IBMTransactionsAML(root=dataset_path, pretrain=pretrain_set, masked_dir=masked_dir)
+    if "ibm" in dataset_path:
+        dataset = IBMTransactionsAML(
+            root=dataset_path, 
+            pretrain=pretrain_set,
+        )
+    elif "eth" in dataset_path:
+       dataset = EthereumPhishingTransactions(
+            root=dataset_path,
+            pretrain=pretrain_set,
+        ) 
     dataset.materialize()
     global num_numerical, num_categorical, num_columns, num_cat
-    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-    num_cat = len(dataset.tensor_frame.col_names_dict[stype.categorical])
-    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
+    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in dataset.tensor_frame.col_names_dict else 0
+    num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in dataset.tensor_frame.col_names_dict else 0 
+    num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in dataset.tensor_frame.col_names_dict else 0
+    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else []
     num_columns = num_numerical + num_cat
     dataset.df.head(5)
     return dataset
@@ -257,7 +267,7 @@ def train(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mo
         float: The average training loss for the epoch.
     """
     model.train()
-    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
+    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     ssloss = SSLoss(device, num_numerical)
     with tqdm(train_loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
@@ -266,6 +276,7 @@ def train(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mo
             num_pred, cat_pred = decoder(x_cls)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
+            tf.y = tf.y.cpu()
             loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             optimizer.zero_grad()
             loss.backward()
@@ -305,7 +316,7 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
     ssloss = SSLoss(device, num_numerical)
     accum_acc = accum_l2 = 0
     loss_c_accum = loss_n_accum = 0
-    t_n = t_c = 0
+    t_n = t_c = 1e-12
     with tqdm(test_loader, desc='Evaluating') as t:
         for tf in t:
             tf = tf.to(device)
@@ -313,6 +324,7 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
             num_pred, cat_pred = decoder(x_cls)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
+            tf.y = tf.y.cpu()
             loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()

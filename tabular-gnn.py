@@ -13,6 +13,7 @@ from torch_frame.data.stats import StatType
 from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
+from src.datasets import EthereumPhishingTransactions
 from src.nn.models import TABGNN
 from src.nn.decoder import MCMHead
 from src.nn.gnn.decoder import LinkPredHead
@@ -48,7 +49,7 @@ args = None
 def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
-    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
+    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
@@ -128,8 +129,7 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
     mcm_decoder.eval()
     total_count = 0
     accum_acc = accum_l2 = 0
-    loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
-    t_n = t_c = 0
+    loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset)
@@ -256,7 +256,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
     if moo == "moco":
         mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
     loss_accum = total_count = 0
-    loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
+    loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
@@ -287,11 +287,13 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
             x_target = x_gnn[pos_edge_index.T].reshape(-1, 2 * args["channels"])#.relu()
             x_target = torch.cat((x_target, pos_edge_attr), 1)
             num_pred, cat_pred = mcm_decoder(x_target)
+
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
 
             optimizer.zero_grad()
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
+        
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             if "moco" in moo:
                 moco_loss = mocoloss.loss([link_loss, t_loss])
@@ -329,10 +331,9 @@ def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, datase
     total_count = 0
     loss_accum = loss_lp_accum = total_count = 0
     accum_acc = accum_l2 = 0
-    loss_c_accum = loss_n_accum = t_c = t_n = 0
+    loss_c_accum = loss_n_accum = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            batch_size = len(tf.y)
             batch_size = len(tf.y)
             node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
             node_feats = node_feats.to(device)
@@ -365,7 +366,6 @@ def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, datase
             num_pred, cat_pred = mcm_decoder(x_target)
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred] 
-
             link_loss = ssloss.lp_loss(pos_pred, neg_pred)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
             # moco_loss = mocoloss.loss([link_loss, t_loss])
@@ -506,19 +506,28 @@ def parse_pretrain_args(pretrain) -> Set[PretrainType]:
     return pretrain_set
 
 def get_dataset(dataset_path: str, pretrain: Set[PretrainType], split_type, data_split, khop_neighbors):
-    dataset = IBMTransactionsAML(
-        root=dataset_path, 
-        pretrain=pretrain,
-        split_type=split_type,
-        splits=data_split, 
-        khop_neighbors=khop_neighbors
-    )
+    if "ibm" in dataset_path:
+        dataset = IBMTransactionsAML(
+            root=dataset_path, 
+            pretrain=pretrain,
+            split_type=split_type,
+            splits=data_split, 
+            khop_neighbors=khop_neighbors
+        )
+    elif "eth" in dataset_path:
+       dataset = EthereumPhishingTransactions(
+            root=dataset_path, 
+            pretrain=pretrain,
+            split_type=split_type,
+            splits=data_split, 
+            khop_neighbors=khop_neighbors
+        ) 
     dataset.materialize()
     dataset.df.head(5)
     global num_numerical, num_categorical, num_columns
-    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-    num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
-    num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp])
+    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in dataset.tensor_frame.col_names_dict else 0
+    num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in dataset.tensor_frame.col_names_dict else 0 
+    num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in dataset.tensor_frame.col_names_dict else 0
     num_columns = num_numerical + num_categorical + num_t
     return dataset
 
@@ -658,7 +667,7 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
 
     encoder = dataset.get_encoder(channels)
     model = get_model(dataset, encoder, channels, num_layers, compile, checkpoint, dropout)
-    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
+    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else []
     mcm_decoder = MCMHead(channels, num_numerical, num_categorical, w=3).to(device)
     lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
 

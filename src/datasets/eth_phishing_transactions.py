@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class IBMTransactionsAML(torch_frame.data.Dataset):
+class EthereumPhishingTransactions(torch_frame.data.Dataset):
         r"""`"Realistic Synthetic Financial Transactions for Anti-Money Laundering Models" https://arxiv.org/pdf/2306.16424.pdf`_.
         
         IBM Transactions for Anti-Money Laundering (AML) dataset.
@@ -51,72 +51,68 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
             self.root = root
             self.split_type = split_type
             self.splits = splits
             self.khop_neighbors = khop_neighbors
 
             names = [
-                'Timestamp',
-                'From Bank',
-                'From ID',
-                'To Bank',
-                'To ID',
-                'Amount Received',
-                'Receiving Currency',
-                'Amount Paid',
-                'Payment Currency',
-                'Payment Format',
-                'Is Laundering',
+                'nonce',
+                'from_address',
+                'to_address',
+                #'transaction_index',
+                'value',
+                'gas',
+                'gas_price',
+                # 'receipt_status',
+                'block_timestamp',
+                # 'phishing',
             ]
             dtypes = {
-                'From Bank': 'category',
-                'From ID': 'float64',
-                'To Bank': 'category',
-                'To ID': 'float64',
-                'Amount Received': 'float64',
-                'Receiving Currency': 'category',
-                'Amount Paid': 'float64',
-                'Payment Currency': 'category',
-                'Payment Format': 'category',
-                'Is Laundering': 'category',
+                'nonce': 'float64',
+                'from_address': 'float64',
+                'to_address': 'float64',
+                #'transaction_index': 'category',
+                'value': 'float64',
+                'gas': 'float64',
+                'gas_price': 'float64',
+                # 'receipt_status': 'category',
+                'block_timestamp': 'float64',
+                # 'phishing': 'category',
             }
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
+            self.df.reset_index(inplace=True)
+            
             col_to_stype = {
-                'From Bank': torch_frame.categorical,
-                'To Bank': torch_frame.categorical,
-                'Payment Currency': torch_frame.categorical,
-                'Receiving Currency': torch_frame.categorical,
-                'Payment Format': torch_frame.categorical,
-                'Timestamp': torch_frame.timestamp,
-                'Amount Paid': torch_frame.numerical,
-                #'Amount Received': torch_frame.numerical
+                'nonce': torch_frame.numerical,
+                #'transaction_index': torch_frame.categorical,
+                'value': torch_frame.numerical,
+                'gas': torch_frame.numerical,
+                'gas_price': torch_frame.numerical,
+                # 'receipt_status': torch_frame.categorical,
+                'block_timestamp': torch_frame.timestamp,
             }
-            #num_columns = ['Amount Received', 'Amount Paid']
-            num_columns = ['Amount Paid']
-            cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            num_columns = ['nonce', 'value', 'gas', 'gas_price']
+            #cat_columns = ['receipt_status']
+            #cat_columns = ['transaction_index']
+            cat_columns = []
 
-            # Split into train, validation, test sets
-            self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
+            self.df = apply_split(self.df, self.split_type, self.splits, "block_timestamp")
             
             logger.info(f'Creating graph...')
             start = time.time()
-            col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
+            col_to_stype = create_graph(self, col_to_stype, "from_address", "to_address")
             logger.info(f'Graph created in {time.time()-start} seconds.')
 
-            # Apply input corruption
             if PretrainType.MASK in pretrain:
                 logger.info(f'Applying mask...')
                 start = time.time()
-                # mask = create_mask(self, num_columns + cat_columns)
-                # self.df["maskable_column"] = mask
                 col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
                 logger.info(f'Mask applied in {time.time()-start} seconds.')
 
-            # Define target column to predict
-            col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
+            col_to_stype = set_target_col(self, pretrain, col_to_stype, "phishing")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
         def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):

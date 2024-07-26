@@ -7,8 +7,10 @@ import itertools
 
 
 def apply_split(df: pd.DataFrame, split_type: str, splits: list, timestamp_col: str) -> pd.DataFrame:
-    if split_type == 'temporal':
+    if split_type == 'temporal_daily':
         df = temporal_balanced_split(df, splits, timestamp_col)
+    elif split_type == 'temporal':
+        df = temporal_split(df, splits, timestamp_col)
     else:
         df = random_split(df, splits)
     return df
@@ -19,22 +21,27 @@ def random_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
     return df
 
 
-def temporal_split(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
+def temporal_split(df: pd.DataFrame, splits: list, timestamp_col: str) -> pd.DataFrame:
     assert timestamp_col in df.columns, \
-        '"transaction" split is only available for datasets with a "Timestamp" column'
-    df = df.sort_values(by=timestamp_col)
-    train_size = int(df.shape[0] * 0.3)
-    validation_size = int(df.shape[0] * 0.1)
-    test_size = df.shape[0] - train_size - validation_size
+        f'Split is only available for datasets with a {timestamp_col} column'
+    # create a mask column that stores the sorted indices based on the timestamp column
+    mask = df[timestamp_col].argsort() - 1
 
-    # add split column, use 0 for train, 1 for validation, 2 for test
-    df['split'] = [0] * train_size + [1] * validation_size + [2] * test_size
+    train_size = int(df.shape[0] * splits[0])
+    validation_size = int(df.shape[0] * splits[1])
+
+    # if mask < train_size, then it is train, if mask < train_size + validation_size, then it is validation, else test
+    df['split'] = 2
+    df.loc[mask < train_size, 'split'] = 0
+    df.loc[(mask >= train_size) & (mask < train_size + validation_size), 'split'] = 1
+
     return df
 
 
 def temporal_balanced_split(df: pd.DataFrame, splits: list, timestamp_col: str) -> pd.DataFrame:
     assert timestamp_col in df.columns, \
         f"Split is only available for datasets with a {timestamp_col} column."
+    # print example timestamps
     df[timestamp_col] = df[timestamp_col] - df[timestamp_col].min()
 
     timestamps = torch.Tensor(df[timestamp_col].to_numpy())
@@ -49,7 +56,6 @@ def temporal_balanced_split(df: pd.DataFrame, splits: list, timestamp_col: str) 
         daily_trans.append(day_inds.shape[0])
 
     split_per = splits
-    # split_per = [0.8, 0.2]
     daily_totals = np.array(daily_trans)
     d_ts = daily_totals
     I = list(range(len(d_ts)))

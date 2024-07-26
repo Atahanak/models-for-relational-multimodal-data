@@ -31,6 +31,7 @@ import networkx as nx
 import time
 from datetime import datetime, timezone
 import os
+import sys
 import pandas as pd
 
 def load_pickle(fname):
@@ -101,7 +102,7 @@ to_address = [x[1] for x in uniql]
 time_stamps = [datetime.fromtimestamp(x[2], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S%z") for x in uniql]
 
 from google.cloud import bigquery
-client = bigquery.Client(project='windy-nation-428806-q0')
+client = bigquery.Client(project='crafty-granite-429311-u2')
 
 def get_transactions(from_address, to_address, time_stamps):
     assert len(from_address) == len(to_address) == len(time_stamps)
@@ -131,9 +132,10 @@ start = time.time()
 with open(transactions_path, 'a') as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=['hash', 'nonce', 'transaction_index', 'from_address', 'to_address', 'value', 'gas', 'gas_price', 'receipt_gas_used', 'receipt_contract_address', 'receipt_status', 'block_timestamp', 'block_number', 'max_fee_per_gas', 'max_priority_fee_per_gas', 'transaction_type', 'receipt_effective_gas_price'])
     writer.writeheader()
-    for i in range(0, 100000, batch):
+    for i in range(0, len(from_address), batch):
         start = time.time()
-        rows = get_transactions(from_address[i:i+batch], to_address[i:i+batch], time_stamps[i:i+batch])
+        #rows = get_transactions(from_address[i:i+batch], to_address[i:i+batch], time_stamps[i:i+batch])
+        rows = get_transactions(to_address[i:i+batch], from_address[i:i+batch], time_stamps[i:i+batch])
         read += len(rows)
         for row in rows:
            writer.writerow(row)
