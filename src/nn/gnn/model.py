@@ -74,13 +74,14 @@ class GINe(torch.nn.Module):
 class PNA(torch.nn.Module):
     def __init__(self, num_features, num_gnn_layers, n_classes=2, 
                 n_hidden=128, edge_updates=True,
-                edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None):
+                edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None, encoder=None):
         super().__init__()
         #n_hidden = int((n_hidden // 5) * 5)
         self.n_hidden = n_hidden
         self.num_gnn_layers = num_gnn_layers
         self.edge_updates = edge_updates
         self.final_dropout = final_dropout
+        self.encoder = encoder
 
         aggregators = ['mean', 'min', 'max', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
