@@ -20,6 +20,7 @@ from torch_frame.data.stats import StatType
 from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
+from src.datasets import EthereumPhishingTransactions
 from src.nn.models import TABGNN
 from src.nn.decoder import MCMHead
 from src.nn.gnn.decoder import LinkPredHead
@@ -104,9 +105,22 @@ torch.backends.cudnn.benchmark = False
 os.environ["PYTHONHASHSEED"] = str(seed)
 
 # %%
-dataset = IBMTransactionsAML(
+# dataset = IBMTransactionsAML(
+#     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Medium_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+#     pretrain=pretrain,
+#     mask_type="replace",
+#     split_type=split_type, 
+#     splits=data_split, 
+#     khop_neighbors=khop_neighbors
+# )
+dataset = EthereumPhishingTransactions(
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
-    root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
+    root='/mnt/data/ethereum-phishing-transaction-network/ethereum-phishing-transaction-network.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/mnt/data/ibm-transactions-for-anti-money-laundering-aml/HI-Medium_Trans-c.csv',# if not testing else '/mnt/data/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     #root='/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv' if not testing else '/scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/dummy-c.csv', 
     pretrain=pretrain,
@@ -115,17 +129,20 @@ dataset = IBMTransactionsAML(
     splits=data_split, 
     khop_neighbors=khop_neighbors
 )
+s = time.time()
 dataset.materialize()
+logger.info(f'Dataset materialized in {time.time()-s} seconds.')
 train_dataset, val_dataset, test_dataset = dataset.split()
 
 # %%
-batch_size = 200
+batch_size = 400
 tensor_frame = dataset.tensor_frame
-train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, num_workers=4)
-val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=True, num_workers=4)
-test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, num_workers=4)
-num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
+train_loader = DataLoader(train_dataset.tensor_frame, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+val_loader = DataLoader(val_dataset.tensor_frame, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+test_loader = DataLoader(test_dataset.tensor_frame, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in dataset.tensor_frame.col_names_dict else 0
+num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in dataset.tensor_frame.col_names_dict else 0 
+num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in dataset.tensor_frame.col_names_dict else 0
 
 num_columns = num_numerical + num_categorical + 1
 logger.info(f"num_numerical: {num_numerical}")
@@ -408,7 +425,7 @@ def eval(dataset, loader, encoder, model, lp_decoder, mcm_decoder, dataset_name)
         })
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}, {"accuracy": accuracy, "rmse": rmse}
 
-num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else 0
+num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else []
 mcm_decoder = MCMHead(channels, num_numerical, num_categorical, w=3).to(device)
 lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
 
@@ -664,22 +681,19 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
     loss_accum = total_count = 0
     loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 0
     count = 0
-    ave = 0
-    l_time = 0
-    f_time = 0
-    b_time = 0
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as prof:
         for tf in loader:
             with record_function("pre-processing"):
                 batch_size = len(tf.y)
                 node_feats, edge_index, edge_attr, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset)
-                #tf.y = tf.y.to(device)
-                node_feats = node_feats.to(device)
-                edge_index = edge_index.to(device)
-                edge_attr = edge_attr.to(device)
-                input_edge_index = input_edge_index.to(device)
-                target_edge_index = target_edge_index.to(device)
-                target_edge_attr = target_edge_attr.to(device)
+            with record_function("cpu to gpu"):
+                # tf.y = tf.y.to(device, non_blocking=True)
+                node_feats = node_feats.to(device, non_blocking=True)
+                edge_index = edge_index.to(device, non_blocking=True)
+                edge_attr = edge_attr.to(device, non_blocking=True)
+                input_edge_index = input_edge_index.to(device, non_blocking=True)
+                target_edge_index = target_edge_index.to(device, non_blocking=True)
+                target_edge_attr = target_edge_attr.to(device, non_blocking=True)
 
             with record_function("forward"):
                 edge_attr, _ = encoder(edge_attr)
@@ -697,6 +711,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
                 pos_edge_attr = target_edge_attr_mcm[:batch_size,:]
                 x_target = torch.cat((x_target, pos_edge_attr), 1)
                 num_pred, cat_pred = mcm_decoder(x_target)
+            with record_function("copy back"):
                 num_pred = num_pred.cpu()
                 cat_pred = [x.cpu() for x in cat_pred]
             
@@ -712,17 +727,20 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
 
             #loss_accum += ((link_loss.item()*moco_loss[0]+(t_loss.item()*moco_loss[1])) * len(tf.y))
             total_count += len(tf.y)
-            t_c += loss_c[1]
-            t_n += loss_n[1]
-            loss_c_accum += loss_c[0].item()
-            loss_n_accum += loss_n[0].item()
+            # t_c += loss_c[1]
+            # t_n += loss_n[1]
+            # loss_c_accum += loss_c[0].item()
+            # loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(tf.y)
             if count == 10:
                 break
             count += 1
             prof.step()
+    
     print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=15))
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=15))
+    # store trace
+    prof.export_chrome_trace(f"/mnt/data/.cache/trace_eth_{batch_size}.json")
     return {'loss': loss_accum / total_count} 
 
 # %%
