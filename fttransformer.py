@@ -356,7 +356,7 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
 
 def main(checkpoint="None", dataset="/path/to/your/dataset/", run_name="fttransformer",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=20,
-         data_split=[0.6, 0.2, 0.2], split_type="temporal", pretrain=["mask"],
+         data_split=[0.6, 0.2, 0.2], split_type="temporal_daily", pretrain=["mask"],
          is_compile=False, testing=False, wandb_dir="/wandb/dir/", group="", masked_dir="", save_dir="/save/dir/"):
     args = {
         "testing": testing,

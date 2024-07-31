@@ -630,7 +630,7 @@ def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: li
 
 def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name", save_dir="/path/to/save/",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
-         data_split=[0.6, 0.2, 0.2], dropout=0.5, split_type="temporal", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
+         data_split=[0.6, 0.2, 0.2], dropout=0.5, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
          compile=False, testing=True, wandb_dir="/path/to/wandb", group="", mode="mcm-lp", moo="sum"):
     global args
     args = {
