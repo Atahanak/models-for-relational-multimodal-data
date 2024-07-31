@@ -208,20 +208,7 @@ def initialize_model(dataset: IBMTransactionsAML, device: torch.device, channels
     ).to(device)
 
     if checkpoint:
-        # get epoch from checkpoint file name
-        checkpoint.split(".pth")
-        pattern = r"^saved_models/self-supervised/run_(?P<identifier>[a-zA-Z0-9]+)_epoch_(?P<epoch>\d+)\.pth$"
-        match = re.match(pattern, checkpoint)
-
-        if match:
-            identifier = match.group("identifier")
-            epoch = match.group("epoch")
-            print(f'Continuing run_{identifier} using checkpoint file: {checkpoint} from epoch {epoch}')
-            model.load_state_dict(torch.load(checkpoint, map_location=device))
-        else:
-            raise ValueError('Checkpoint file has invalid format')
-    else:
-        model = torch.compile(model, dynamic=True) if is_compile else model
+        model.load_state_dict(torch.load(checkpoint, map_location=device))
 
     return encoder, model, decoder
 
