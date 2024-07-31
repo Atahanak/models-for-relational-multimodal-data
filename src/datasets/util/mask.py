@@ -99,7 +99,7 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     self.train_sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
 
     # Create val graph
-    val_mask = self.df['split'] == 0 | self.df['split'] == 1
+    val_mask = val_mask = self.df['split'].isin([0, 1])
     val_mask = torch.tensor(val_mask.to_numpy(), dtype=torch.bool)
     val_edge_index = edge_index[:, val_mask]
     val_ids = ids[val_mask]
@@ -138,7 +138,8 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
     # Handle supervised column
     if not pretrain:
         # !!! self.df['Is Laundering'] column stores strings "0" and "1".
-        self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)]) + self.df['link'] 
+        #self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)]) + self.df['link'] 
+        self.df['target'] = self.df.apply(lambda row: [float(row[supervised_col])] + row['link'], axis=1)
         self.target_col = 'target'
         col_to_stype['target'] = torch_frame.relation
         self.df = self.df.drop(columns=['link'])

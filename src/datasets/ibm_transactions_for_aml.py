@@ -150,8 +150,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
             
             if mode == 'train':
-                out = self.sampler.sample_from_edges(input)
-                perm = self.sampler.edge_permutation 
+                out = self.train_sampler.sample_from_edges(input)
+                perm = self.train_sampler.edge_permutation 
             elif mode == 'val':
                 out = self.val_sampler.sample_from_edges(input)
                 perm = self.val_sampler.edge_permutation 

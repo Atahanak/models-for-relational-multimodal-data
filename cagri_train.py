@@ -9,7 +9,8 @@ from torch_frame.nn import (
     LinearEncoder,
     TimestampEncoder,
 )
-import torch 
+import torch
+from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
 from sklearn.metrics import f1_score
@@ -19,58 +20,67 @@ parser = create_parser()
 args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+config={
+    "epochs": args.n_epochs,
+    "batch_size": args.batch_size,
+    "model": args.model,
+    "data": args.data,
+    "output_path" : args.output_path,
+    "num_neighbors": args.num_neighs,
+    "emlps": args.emlps, 
+    "reverse_mp": args.reverse_mp,
+    "ego": args.ego,
+    "lr": 5e-4,
+    "n_hidden": 64,
+    "n_gnn_layers": 2,
+    "n_classes" : 2,
+    "loss": "ce",
+    "w_ce1": 1.,
+    "w_ce2": 6.,
+    "dropout": 0.10527690625126304,
+}
 
 #define a model config dictionary and wandb logging at the same time
+print("Testing: ", args.testing)
 wandb.init(
     mode="disabled" if args.testing else "online",
     project="rel-mm-supervised", #replace this with your wandb project name if you want to use wandb logging
-
-    config={
-        "epochs": args.n_epochs,
-        "batch_size": args.batch_size,
-        "model": args.model,
-        "data": args.data,
-        "output_path" : args.output_path,
-        "num_neighbors": args.num_neighs,
-        "emlps": args.emlps, 
-        "reverse_mp": args.reverse_mp,
-        "ego": args.ego,
-        "lr": 5e-4,
-        "n_hidden": 64,
-        "n_gnn_layers": 2,
-        "n_classes" : 2,
-        "loss": "ce",
-        "w_ce1": 1.,
-        "w_ce2": 6.,
-        "dropout": 0.10527690625126304,
-    }
+    entity="cse3000",
+    config=config
 )
 
-config = wandb.config
 create_experiment_path(config) # type: ignore
 # Create a logger
 logger_setup()
 
 dataset = IBMTransactionsAML(
-    root=config.data,
+    root=config['data'],
     split_type='temporal', 
     splits=[0.6, 0.2, 0.2], 
     khop_neighbors=args.num_neighs
 )
 dataset.materialize()
+
 train_dataset, val_dataset, test_dataset = dataset.split()
 
+if config['model'] == 'pna':
+    edge_index = dataset.train_graph.edge_index
+    num_nodes = dataset.train_graph.num_nodes
+    lol = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
+    print(type(lol))
+    config["in_degrees"] = lol
+print(type(config["in_degrees"]))
 
 tensor_frame = dataset.tensor_frame 
-train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config.batch_size, shuffle=True, num_workers=4)
-val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config.batch_size, shuffle=False, num_workers=4)
-test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config.batch_size, shuffle=False, num_workers=4)
+train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
+val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
+test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 
 num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
 num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
 
 num_columns = num_numerical + num_categorical + 1
-config.num_columns = num_columns
+config['num_columns'] = num_columns
 logging.info(f"num_numerical: {num_numerical}")
 logging.info(f"num_categorical: {num_categorical}")
 logging.info(f"num_columns: {num_columns}")
@@ -82,24 +92,21 @@ stype_encoder_dict = {
         stype.timestamp: TimestampEncoder(),
     }
 
-
 model = SupervisedTabGNN(
             dataset.col_stats, 
             dataset.tensor_frame.col_names_dict, 
             stype_encoder_dict, 
             config).to(device)
-loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
-optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
-
-
+loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config['w_ce1'], config['w_ce2']]).to(device))
+optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
 
 best_val_f1 = 0
-for epoch in range(config.epochs):
+for epoch in range(config['epochs']):
     total_loss = total_examples = 0
     preds = []
     ground_truths = []
 
-    for batch in train_loader:
+    for batch in tqdm(train_loader, disable=not args.tqdm):
 
         optimizer.zero_grad()
         batch_size = len(batch.y)

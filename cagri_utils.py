@@ -16,7 +16,7 @@ from torch_geometric.transforms import BaseTransform
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 
-from src.nn.gnn.model import GINe, PNA
+from src.nn.gnn.model import GINe, PNAS
 from src.nn.gnn.decoder import ClassifierHead
 from sklearn.metrics import f1_score
 
@@ -126,7 +126,7 @@ def save_model(model, optimizer, epoch, config, ):
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()
                 },
-            osp.join(config.experiment_path, str(epoch)+ '.tar')
+            osp.join(config['experiment_path'], str(epoch)+ '.tar')
             )
     
 
@@ -135,8 +135,8 @@ def create_experiment_path(config):
     Get unique experiment id
     """
     run_str = '{date:%m-%d_%H:%M:%S.%f}'.format(date=datetime.now())
-    config.experiment_path = osp.join(config.output_path, 'experiments', run_str)
-    os.makedirs(config.experiment_path)
+    config['experiment_path'] = osp.join(config['output_path'], 'experiments', run_str)
+    os.makedirs(config['experiment_path'])
     return
 
 
@@ -145,7 +145,7 @@ class SupervisedTabGNN(nn.Module):
         super().__init__()
         
         self.encoder = StypeWiseFeatureEncoder(
-                    out_channels=config.n_hidden,
+                    out_channels=config['n_hidden'],
                     col_stats=col_stats,
                     col_names_dict=col_names_dict,
                     stype_encoder_dict=stype_encoder_dict,
@@ -153,7 +153,7 @@ class SupervisedTabGNN(nn.Module):
 
         self.graph_model = self.get_graph_model(config)
 
-        self.classifier = ClassifierHead(config.n_classes, config.n_hidden, dropout=config.dropout)
+        self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
 
     
     def forward(self, x, edge_index, edge_attr):
@@ -166,15 +166,30 @@ class SupervisedTabGNN(nn.Module):
 
     def get_graph_model(self, config):
         
-        n_feats = 2 if config.ego else 1
-        e_dim = config.num_columns * config.n_hidden
+        n_feats = 2 if config['ego'] else 1
+        e_dim = config['num_columns'] * config['n_hidden']
 
-        if config.model == "gin":
-            model = GINe(num_features=n_feats, num_gnn_layers=config.n_gnn_layers, 
-                         n_hidden=config.n_hidden, 
-                         edge_updates=config.emlps, 
+        if config['model'] == "gin":
+            model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
+                         n_hidden=config['n_hidden'], 
+                         edge_updates=config['emlps'], 
                          edge_dim=e_dim, 
-                         reverse_mp=config.reverse_mp)
+                         reverse_mp=config['reverse_mp'])
+        elif config['model'] == "pna":
+            if config['in_degrees'] is None:
+                raise ValueError("In degrees are not provided for PNA model!")
+            in_degrees = config['in_degrees']
+            max_in_degree = int(max(in_degrees))
+            in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+            in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+            model = PNAS(
+                num_features=1, 
+                n_hidden=config['n_hidden'], 
+                num_gnn_layers=config['n_gnn_layers'], 
+                edge_dim=e_dim, 
+                deg=in_degree_histogram,
+                edge_updates=config['emlps'], 
+                reverse_mp=config['reverse_mp'])
         else:
             raise ValueError("Invalid model name!")
         
