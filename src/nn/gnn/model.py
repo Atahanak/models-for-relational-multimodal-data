@@ -25,7 +25,12 @@ class GINEConvHetero(nn.Module):
         self.conv_forw = GINEConv(network, edge_dim=n_hidden)
         self.conv_back = GINEConv(network, edge_dim=n_hidden)
 
-        self.lin = Linear(n_hidden*3, n_hidden)
+        self.lin = Linear(n_hidden*3, n_hidden)\
+    
+    def reset_parameters(self):
+        self.conv_forw.reset_parameters()
+        self.conv_back.reset_parameters()
+        self.lin.reset_parameters()
 
     def forward(self, x, edge_index, edge_attr):
 
@@ -52,6 +57,11 @@ class PNAConvHetero(nn.Module):
                             divide_input=divide_input)
 
         self.lin = Linear(n_hidden*3, n_hidden)
+    
+    def reset_parameters(self):
+        self.conv_forw.reset_parameters()
+        self.conv_back.reset_parameters()
+        self.lin.reset_parameters()
 
     def forward(self, x, edge_index, edge_attr):
 

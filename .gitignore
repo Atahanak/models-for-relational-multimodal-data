@@ -169,4 +169,5 @@ wandb/
 
 saved_models/
 scripts/
+outputs/
 environment_root.yml

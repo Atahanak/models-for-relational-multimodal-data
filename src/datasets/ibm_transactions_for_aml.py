@@ -13,7 +13,7 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, create_mask
+from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, ports
 from .util.split import apply_split
 
 import time
@@ -51,7 +51,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], add_ports=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -85,9 +85,9 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                # 'From Bank': torch_frame.categorical,
-                # 'To Bank': torch_frame.categorical,
-                # 'Payment Currency': torch_frame.categorical,
+                'From Bank': torch_frame.categorical,
+                'To Bank': torch_frame.categorical,
+                'Payment Currency': torch_frame.categorical,
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
                 'Timestamp': torch_frame.timestamp,
@@ -96,8 +96,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             }
             #num_columns = ['Amount Received', 'Amount Paid']
             num_columns = ['Amount Received']
-            cat_columns = ['Receiving Currency', 'Payment Format']
-            # cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            #cat_columns = ['Receiving Currency', 'Payment Format']
+            cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
@@ -106,6 +106,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             start = time.time()
             col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
             logger.info(f'Graph created in {time.time()-start} seconds.')
+
+            if add_ports:
+                add_ports(self)
+                col_to_stype['in_port'] = stype.numerical
+                col_to_stype['out_port'] = stype.numerical
 
             # Apply input corruption
             if PretrainType.MASK in pretrain:

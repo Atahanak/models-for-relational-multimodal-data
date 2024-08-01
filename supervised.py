@@ -14,12 +14,13 @@ from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
 from sklearn.metrics import f1_score
-from cagri_utils import *
+from utils import *
 
 parser = create_parser()
 args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+#device = torch.device("cpu")
 config={
     "epochs": args.n_epochs,
     "batch_size": args.batch_size,
@@ -55,7 +56,7 @@ logger_setup()
 
 dataset = IBMTransactionsAML(
     root=config['data'],
-    split_type='temporal', 
+    split_type='temporal_daily', 
     splits=[0.6, 0.2, 0.2], 
     khop_neighbors=args.num_neighs
 )
@@ -63,13 +64,10 @@ dataset.materialize()
 
 train_dataset, val_dataset, test_dataset = dataset.split()
 
-if config['model'] == 'pna':
+if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnnfused':
     edge_index = dataset.train_graph.edge_index
     num_nodes = dataset.train_graph.num_nodes
-    lol = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
-    print(type(lol))
-    config["in_degrees"] = lol
-print(type(config["in_degrees"]))
+    config["in_degrees"] = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
 
 tensor_frame = dataset.tensor_frame 
 train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
@@ -92,11 +90,30 @@ stype_encoder_dict = {
         stype.timestamp: TimestampEncoder(),
     }
 
-model = SupervisedTabGNN(
-            dataset.col_stats, 
-            dataset.tensor_frame.col_names_dict, 
-            stype_encoder_dict, 
-            config).to(device)
+if config['model'] == 'pna' or config['model'] == 'gin':
+    model = GNN(
+                dataset.col_stats, 
+                dataset.tensor_frame.col_names_dict, 
+                stype_encoder_dict, 
+                config
+            ).to(device)
+elif config['model'] == 'tabgnn':
+    model = TABGNNS(
+                dataset.col_stats, 
+                dataset.tensor_frame.col_names_dict, 
+                stype_encoder_dict, 
+                config
+            ).to(device)
+elif config['model'] == 'tabgnnfused':
+    model = TABGNNFusedS(
+                dataset.col_stats, 
+                dataset.tensor_frame.col_names_dict, 
+                stype_encoder_dict, 
+                config
+            ).to(device)
+else:
+    raise ValueError("Invalid model name!")
+
 loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config['w_ce1'], config['w_ce2']]).to(device))
 optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
 
@@ -134,7 +151,7 @@ for epoch in range(config['epochs']):
     logging.info(f'Train F1: {f1:.4f}, Epoch: {epoch}')
     logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
 
-    #evaluate
+    # evaluate
     val_f1 = evaluate(val_loader, dataset, tensor_frame, model, device, args, 'val')
     te_f1 = evaluate(test_loader, dataset, tensor_frame, model, device, args, 'test')
 

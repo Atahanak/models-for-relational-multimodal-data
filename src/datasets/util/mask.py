@@ -371,3 +371,39 @@ def mask_bert(df, avg_per_num_col, distributions_cat, distributions_num, cat_col
     df.loc[replace_mask] = mask_replace(df.loc[replace_mask], distributions_cat, distributions_num, cat_columns, num_columns)
     
     return df
+
+# def to_adj_nodes_with_times(data):
+#     num_nodes = data.num_nodes
+#     timestamps = torch.zeros((data.edge_index.shape[1], 1)) if data.timestamps is None else data.timestamps.reshape((-1,1))
+#     edges = torch.cat((data.edge_index.T, timestamps), dim=1)
+#     adj_list_out = dict([(i, []) for i in range(num_nodes)])
+#     adj_list_in = dict([(i, []) for i in range(num_nodes)])
+#     for u,v,t in edges:
+#         u,v,t = int(u), int(v), int(t)
+#         adj_list_out[u] += [(v, t)]
+#         adj_list_in[v] += [(u, t)]
+#     return adj_list_in, adj_list_out
+
+# def ports(edge_index, adj_list):
+#     ports = torch.zeros(edge_index.shape[1], 1)
+#     ports_dict = {}
+#     for v, nbs in adj_list.items():
+#         if len(nbs) < 1: continue
+#         a = np.array(nbs)
+#         a = a[a[:, -1].argsort()]
+#         _, idx = np.unique(a[:,[0]],return_index=True,axis=0)
+#         nbs_unique = a[np.sort(idx)][:,0]
+#         for i, u in enumerate(nbs_unique):
+#             ports_dict[(u,v)] = i
+#     for i, e in enumerate(edge_index.T):
+#         ports[i] = ports_dict[tuple(e.numpy())]
+#     return ports
+
+# def add_ports(self):
+#         '''Adds port numberings to the edge features'''
+#         reverse_ports = True
+#         adj_list_in, adj_list_out = to_adj_nodes_with_times(self.)
+#         in_ports = ports(self.edge_index, adj_list_in)
+#         out_ports = [ports(self.edge_index.flipud(), adj_list_out)] if reverse_ports else []
+#         self.edge_attr = torch.cat([self.edge_attr, in_ports] + out_ports, dim=1)
+#         return self

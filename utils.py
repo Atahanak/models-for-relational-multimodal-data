@@ -18,6 +18,8 @@ from torch_geometric.data import Data, HeteroData
 
 from src.nn.gnn.model import GINe, PNAS
 from src.nn.gnn.decoder import ClassifierHead
+from src.nn.models import TABGNN
+from src.nn.models import TABGNNFused
 from sklearn.metrics import f1_score
 
 
@@ -104,6 +106,7 @@ def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
         #select the seed edges from which the batch was created
         batch_size = len(batch.y)
         node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode=mode, args=args)
+
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
             pred = model(node_feats, edge_index, edge_attr)[:batch_size]
@@ -140,28 +143,23 @@ def create_experiment_path(config):
     return
 
 
-class SupervisedTabGNN(nn.Module):
+class GNN(nn.Module):
     def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):
         super().__init__()
-        
+        self.config = config
         self.encoder = StypeWiseFeatureEncoder(
                     out_channels=config['n_hidden'],
                     col_stats=col_stats,
                     col_names_dict=col_names_dict,
                     stype_encoder_dict=stype_encoder_dict,
         )
-
         self.graph_model = self.get_graph_model(config)
-
         self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
-
     
     def forward(self, x, edge_index, edge_attr):
-        
         edge_attr, _ = self.encoder(edge_attr)  
         x, edge_attr = self.graph_model(x, edge_index, edge_attr)
         out = self.classifier(x, edge_index, edge_attr)
-
         return out
 
     def get_graph_model(self, config):
@@ -183,12 +181,108 @@ class SupervisedTabGNN(nn.Module):
             in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
             in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
             model = PNAS(
-                num_features=1, 
+                num_features=n_feats, 
                 n_hidden=config['n_hidden'], 
                 num_gnn_layers=config['n_gnn_layers'], 
                 edge_dim=e_dim, 
                 deg=in_degree_histogram,
                 edge_updates=config['emlps'], 
+                reverse_mp=config['reverse_mp'])
+        else:
+            raise ValueError("Invalid model name!")
+        
+        return model
+
+class TABGNNS(nn.Module):
+    def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):
+        super().__init__()
+        self.config = config
+        self.batch_size = config['batch_size']
+        self.encoder = StypeWiseFeatureEncoder(
+                    out_channels=config['n_hidden'],
+                    col_stats=col_stats,
+                    col_names_dict=col_names_dict,
+                    stype_encoder_dict=stype_encoder_dict,
+        )
+        self.model = self.get_model(config)
+        self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+    
+    def forward(self, x, edge_index, edge_attr):
+        edge_attr, _ = self.encoder(edge_attr)
+        edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+        x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
+        out = self.classifier(x, target_edge_index, target_edge_attr)
+        return out
+
+    def get_model(self, config):
+        
+        n_feats = 2 if config['ego'] else 1
+        e_dim = config['num_columns'] * config['n_hidden']
+
+        if config['model'] == "tabgnn":
+            if config['in_degrees'] is None:
+                raise ValueError("In degrees are not provided for PNA model!")
+            in_degrees = config['in_degrees']
+            max_in_degree = int(max(in_degrees))
+            in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+            in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+            model = TABGNN(
+                node_dim=n_feats, 
+                encoder=self.encoder,
+                nhidden=config['n_hidden'], 
+                channels=config['n_hidden'], 
+                num_layers=config['n_gnn_layers'], 
+                edge_dim=e_dim, 
+                deg=in_degree_histogram,
+                reverse_mp=config['reverse_mp'])
+        else:
+            raise ValueError("Invalid model name!")
+        
+        return model
+
+class TABGNNFusedS(nn.Module):
+    def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):
+        super().__init__()
+        self.config = config
+        self.batch_size = config['batch_size']
+        self.encoder = StypeWiseFeatureEncoder(
+                    out_channels=config['n_hidden'],
+                    col_stats=col_stats,
+                    col_names_dict=col_names_dict,
+                    stype_encoder_dict=stype_encoder_dict,
+        )
+        self.model = self.get_model(config)
+        self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+    
+    def forward(self, x, edge_index, edge_attr):
+        edge_attr, _ = self.encoder(edge_attr)
+        edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+        x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)
+        out = self.classifier(x, target_edge_index, target_edge_attr)
+        return out
+
+    def get_model(self, config):
+        
+        n_feats = 2 if config['ego'] else 1
+        e_dim = config['num_columns'] * config['n_hidden']
+
+        if config['model'] == "tabgnnfused":
+            if config['in_degrees'] is None:
+                raise ValueError("In degrees are not provided for PNA model!")
+            in_degrees = config['in_degrees']
+            max_in_degree = int(max(in_degrees))
+            in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+            in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+            model = TABGNNFused(
+                node_dim=n_feats, 
+                encoder=self.encoder,
+                nhidden=config['n_hidden'], 
+                channels=config['n_hidden'], 
+                num_layers=config['n_gnn_layers'], 
+                edge_dim=e_dim, 
+                deg=in_degree_histogram,
                 reverse_mp=config['reverse_mp'])
         else:
             raise ValueError("Invalid model name!")

@@ -35,12 +35,12 @@ class TABGNN(Module):
         channels: int,
         num_layers: int,
         encoder: Any,
-        reverse_mp: bool = False,
         # PNA parameters
         deg=None,
         node_dim: int = 1,
         nhidden: int = 128,
         edge_dim: int = None,
+        reverse_mp: bool = False,
         # fttransformer parameters
         feedforward_channels: Optional[int] = None,
         nhead: int = 8,
@@ -140,10 +140,11 @@ class PNALayer(Module):
         super().__init__()
         self.channels = channels
         self.nhidden = nhidden
+        self.reverse_mp = reverse_mp
 
         aggregators = ['mean', 'max', 'min', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
-        if self.reverse_mp:
+        if not self.reverse_mp:
             self.gnn_conv = PNAConv(in_channels=nhidden, out_channels=nhidden,
                         aggregators=aggregators, scalers=scalers, deg=deg,
                         edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
