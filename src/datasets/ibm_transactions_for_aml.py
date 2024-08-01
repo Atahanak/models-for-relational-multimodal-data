@@ -13,7 +13,7 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, ports
+from .util.mask import PretrainType, set_target_col, apply_mask, create_graph
 from .util.split import apply_split
 
 import time
@@ -85,9 +85,9 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                'From Bank': torch_frame.categorical,
-                'To Bank': torch_frame.categorical,
-                'Payment Currency': torch_frame.categorical,
+                # 'From Bank': torch_frame.categorical,
+                # 'To Bank': torch_frame.categorical,
+                # 'Payment Currency': torch_frame.categorical,
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
                 'Timestamp': torch_frame.timestamp,
@@ -96,8 +96,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             }
             #num_columns = ['Amount Received', 'Amount Paid']
             num_columns = ['Amount Received']
-            #cat_columns = ['Receiving Currency', 'Payment Format']
-            cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            cat_columns = ['Receiving Currency', 'Payment Format']
+            #cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
@@ -105,7 +105,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             logger.info(f'Creating graph...')
             start = time.time()
             col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
-            logger.info(f'Graph created in {time.time()-start} seconds.')
+            logger.info(f'Graph created in {time.time()-start:.2f} seconds.')
 
             if add_ports:
                 add_ports(self)
@@ -119,7 +119,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 # mask = create_mask(self, num_columns + cat_columns)
                 # self.df["maskable_column"] = mask
                 col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
-                logger.info(f'Mask applied in {time.time()-start} seconds.')
+                logger.info(f'Mask applied in {time.time()-start:.2f} seconds.')
 
             # Define target column to predict
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")

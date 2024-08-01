@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from typing import Optional, Tuple, Set
 
 import numpy as np
@@ -46,12 +47,12 @@ num_numerical = num_categorical = num_columns = 0
 ssloss = ssmetric = None
 args = None
 
-def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
+def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
     loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
 
-    with tqdm(loader, desc=f'Epoch {epoc}') as t:
+    with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, 'train')
             node_feats = node_feats.to(device)
@@ -81,17 +82,17 @@ def train_mcm(dataset, loader, epoc: int, encoder, model, mcm_decoder, optimizer
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
+        wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n}, step=epoch)
     return {'loss': loss_accum / total_count}
 
-def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, scheduler) -> float:
+def train_lp(dataset, loader, epoch: int, encoder, model, lp_decoder, optimizer, scheduler) -> float:
     encoder.train()
     model.train()
     lp_decoder.train()
     total_count = 0
     loss_lp_accum = 0
 
-    with tqdm(loader, desc=f'Epoch {epoc}') as t:
+    with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
             batch_size = len(tf.y)
             node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], "train")
@@ -126,8 +127,7 @@ def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, 
             total_count += len(tf.y)
             loss_lp_accum += link_loss.item() * len(tf.y)
             t.set_postfix(loss_lp=f'{loss_lp_accum/total_count:.4f}')
-            wandb.log({"train_loss_lp": loss_lp_accum/total_count})
-            #wandb.log({"lr": scheduler.get_last_lr()[0]})
+        wandb.log({"train_loss_lp": loss_lp_accum/total_count}, step=epoch)
     return {'loss': loss_lp_accum / total_count} 
 
 @torch.no_grad()
@@ -173,18 +173,15 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
                 loss_c = f'{loss_c_accum/t_c:.4f}', 
                 loss_n = f'{loss_n_accum/t_n:.4f}',
             )
-            wandb.log({
-                f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
-                f"{dataset_name}_loss_c": loss_c_accum/t_c,
-                f"{dataset_name}_loss_n": loss_n_accum/t_n,
-            })
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
-            "epoch": epoch,
+            f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
+            f"{dataset_name}_loss_c": loss_c_accum/t_c,
+            f"{dataset_name}_loss_n": loss_n_accum/t_n,
             f"{dataset_name}_accuracy": accuracy,
             f"{dataset_name}_rmse": rmse,
-        })
+        }, step=epoch)
         return {"accuracy": accuracy, "rmse": rmse}
 
 @torch.no_grad()
@@ -244,25 +241,22 @@ def eval_lp(epoch, dataset, loader: DataLoader, encoder, model, lp_decoder, data
                 hits10=f'{np.mean(hits10):.4f}',
                 loss_lp = f'{loss_lp_accum/total_count:.4f}',
             )
-            wandb.log({
-                f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
-            })
         mrr_score = np.mean(mrrs)
         hits1 = np.mean(hits1)
         hits2 = np.mean(hits2)
         hits5 = np.mean(hits5)
         hits10 = np.mean(hits10)
         wandb.log({
-            "epoch": epoch,
+            f"{dataset_name}_loss_lp": loss_lp_accum/total_count,
             f"{dataset_name}_mrr": mrr_score,
             f"{dataset_name}_hits@1": hits1,
             f"{dataset_name}_hits@2": hits2,
             f"{dataset_name}_hits@5": hits5,
             f"{dataset_name}_hits@10": hits10,
-        })
+        }, step=epoch)
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}
 
-def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, optimizer, scheduler, moo):
+def train(dataset, loader, epoch: int, encoder, model, lp_decoder, mcm_decoder, optimizer, scheduler, moo):
     encoder.train()
     model.train()
     lp_decoder.train()
@@ -271,7 +265,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
         mocoloss = MoCoLoss(model, 2, device, beta=0.999, beta_sigma=0.1, gamma=0.999, gamma_sigma=0.1, rho=0.05)
     loss_accum = total_count = 0
     loss_lp_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
-    with tqdm(loader, desc=f'Epoch {epoc}') as t:
+    with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
             batch_size = len(tf.y)
             node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
@@ -326,8 +320,7 @@ def train(dataset, loader, epoc: int, encoder, model, lp_decoder, mcm_decoder, o
             loss_n_accum += loss_n[0].item()
             loss_lp_accum += link_loss.item() * len(tf.y)
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_lp=f'{loss_lp_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
-            wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n})
-            #wandb.log({"lr": scheduler.get_last_lr()[0]})
+        wandb.log({"train_loss": loss_accum/total_count, "train_loss_lp": loss_lp_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n}, step=epoch)
     return {'loss': loss_accum / total_count} 
 
 @torch.no_grad()
@@ -426,7 +419,6 @@ def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, datase
         accuracy = accum_acc / t_c
         rmse = torch.sqrt(accum_l2 / t_n)
         wandb.log({
-            "epoch": epoch,
             f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
             f"{dataset_name}_loss_c": loss_c_accum/t_c,
             f"{dataset_name}_loss_n": loss_n_accum/t_n,
@@ -438,7 +430,7 @@ def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, datase
             f"{dataset_name}_hits@10": hits10,
             f"{dataset_name}_accuracy": accuracy,
             f"{dataset_name}_rmse": rmse,
-        })
+        }, step=epoch)
         return {"mrr": mrr_score, "hits@1": hits1, "hits@2": hits2, "hits@5": hits5, "hits@10": hits10}, {"accuracy": accuracy, "rmse": rmse}
 
 def parse_checkpoint(checkpoint: str) -> list[str, int]:
@@ -487,14 +479,14 @@ def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str],
         entity="cse3000",
         dir=wandb_dir,
         mode="disabled" if args['testing'] else "online",
-        project="exp",
+        project="iclr",
         name=run_name,
         config=args,
         id=run_id if run_id is not None else None,    
         resume="must" if run_id is not None else None,
         group=group if group is not None else None,
     )
-    wandb.log({"device": str(device)})
+    wandb.log({"device": str(device)}, step=0)
     return run
 
 def parse_pretrain_args(pretrain) -> Set[PretrainType]:
@@ -536,7 +528,9 @@ def get_dataset(dataset_path: str, pretrain: Set[PretrainType], split_type, data
             splits=data_split, 
             khop_neighbors=khop_neighbors
         ) 
+    s = time.time()
     dataset.materialize()
+    logger.info(f"Materialized in {time.time() - s:.2f} seconds")
     dataset.df.head(5)
     global num_numerical, num_categorical, num_columns
     num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in dataset.tensor_frame.col_names_dict else 0
@@ -567,7 +561,7 @@ def get_data_loaders(dataset: IBMTransactionsAML, batch_size: int) -> Tuple[Data
         "train_loader size": len(train_loader),
         "val_loader size": len(val_loader),
         "test_loader size": len(test_loader)
-    })
+    },step=0)
     return train_loader, val_loader, test_loader
 
 def get_model(dataset: IBMTransactionsAML, encoder, channels: int, num_layers: int, compile: bool, checkpoint: Optional[str], dropout: float) -> torch.nn.Module:
@@ -640,7 +634,7 @@ def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: li
     logger.info(f"model_params: {model_params}")
     logger.info(f"learnable_params: {learnable_params}")
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
-    wandb.log({"learnable_params": learnable_params})
+    wandb.log({"learnable_params": learnable_params}, step=0)
     return optimizer
 
 def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name", save_dir="/path/to/save/",
