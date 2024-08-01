@@ -1,17 +1,11 @@
 import os
 
 import numpy as np
-import pandas as pd
 from enum import Enum
 
-import torch_geometric
-from torch_geometric.sampler.neighbor_sampler import NeighborSampler
-
 import torch_frame
-import torch
 from collections import Counter
 
-import time
 import logging
 logging.basicConfig(
     level=logging.DEBUG,  # Set the logging level
@@ -28,94 +22,6 @@ class PretrainType(Enum):
     MASK = 1
     MASK_VECTOR = 2
     LINK_PRED = 3
-
-# def create_graph(self, col_to_stype, src_column, dst_column):
-#     self.sampler = None
-#     # TODO: update Mapper to handle non-integer ids, e.g. strings | Assumes ids are integers and starts from 0!
-#     self.df['link'] = self.df[[src_column, dst_column]].apply(list, axis=1)
-#     col_to_stype['link'] = torch_frame.relation
-
-#     def append_index_to_link(row):
-#         row['link'].append(float(row.name))
-#         return row
-
-#     self.df = self.df.apply(append_index_to_link, axis=1)
-
-#     # get number of uique ids in the dataset
-#     num_nodes = len(set(self.df[src_column].to_list() + self.df[dst_column].to_list()))
-
-#     # init train and val graph
-#     # convert slef.df['link'] to torch tensor
-#     self.edges = torch.tensor(self.df['link'].to_list(), dtype=torch.long)
-#     #self.edges = self.df['link'].to_numpy()
-#     #self.train_edges = self.df[self.df['split'] == 0]['link'].to_numpy()
-#     self.train_edges = torch.tensor(self.df[self.df['split'] == 0]['link'].to_list(), dtype=torch.long)
-#     # self.train_edges = self.edges
-#     # val_edges = self.df[self.df['split'] == 1]['link'].to_numpy()
-
-#     #source = torch.tensor([int(edge[0]) for edge in self.train_edges], dtype=torch.long)
-#     source = self.train_edges[:, 0]
-#     #destination = torch.tensor([int(edge[1]) for edge in self.train_edges], dtype=torch.long)
-#     destination = self.train_edges[:, 1]
-#     #ids = torch.tensor([int(edge[2]) for edge in self.train_edges], dtype=torch.long)
-#     ids = self.train_edges[:, 2]
-#     train_edge_index = torch.stack([source, destination], dim=0)
-#     x = torch.arange(num_nodes)
-#     start = time.time()
-#     self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=ids)
-#     self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
-#     print(f"Time to create graph: {time.time() - start}")
-#     return col_to_stype
-
-def create_graph(self, col_to_stype, src_column, dst_column):
-
-    # Convert src and dst columns to tensors directly
-    src = torch.tensor(self.df[src_column].values, dtype=torch.long)
-    dst = torch.tensor(self.df[dst_column].values, dtype=torch.long)
-    
-    # Create edge index tensor
-    edge_index = torch.stack([src, dst], dim=0)
-    
-    # Create edge attributes (ids)
-    ids = torch.arange(len(src), dtype=torch.float)
-    
-    # Compute number of unique nodes
-    num_nodes = len(torch.unique(edge_index))
-
-    # Create node features
-    x = torch.arange(num_nodes)
-
-    # Create the full graph
-    self.edges = torch.cat([edge_index, ids.unsqueeze(0)], dim=0).t()
-    # Create the 'link' column in the DataFrame
-    self.df['link'] = self.edges.tolist()
-
-    # Create train graph
-    train_mask = self.df['split'] == 0
-    train_mask = torch.tensor(train_mask.to_numpy(), dtype=torch.bool)
-    train_edge_index = edge_index[:, train_mask]
-    train_ids = ids[train_mask]
-    self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=train_ids)
-    self.train_sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
-
-    # Create val graph
-    val_mask = val_mask = self.df['split'].isin([0, 1])
-    val_mask = torch.tensor(val_mask.to_numpy(), dtype=torch.bool)
-    val_edge_index = edge_index[:, val_mask]
-    val_ids = ids[val_mask]
-    self.val_graph = torch_geometric.data.Data(x=x, edge_index=val_edge_index, edge_attr=val_ids)
-    self.val_sampler = NeighborSampler(self.val_graph, num_neighbors=self.khop_neighbors)
-
-    # Create test graph
-    test_edge_index = edge_index
-    test_ids = ids
-    self.test_graph = torch_geometric.data.Data(x=x, edge_index=test_edge_index, edge_attr=test_ids)
-    self.test_sampler = NeighborSampler(self.test_graph, num_neighbors=self.khop_neighbors)
-
-    # Update col_to_stype
-    col_to_stype['link'] = torch_frame.relation
-    
-    return col_to_stype
 
 def create_mask(self, maskable_columns: list[str]):
     # Generate which columns to mask and store in file for reproducibility across different runs
@@ -169,79 +75,6 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.target_col = ''
     return col_to_stype
 
-# def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_columns: list[str],
-#                col_to_stype: dict[str, torch_frame.stype], mask_type: str) -> dict[str, torch_frame.stype]:
-#     maskable_columns = cat_columns + num_columns
-
-#     def _impute_mask_vector(row: pd.Series):
-#         # 1. Get which column we have chosen to mask
-#         masked_column = row["maskable_column"]
-#         original_value = row[masked_column]
-#         # 2. Choose a replacement from prob distribution
-#         if masked_column in cat_columns:
-#             # Don't select the original value
-#             cat_values = list(distributions_cat[masked_column].keys())
-#             p_original = distributions_cat[masked_column][original_value]
-#             replacement = np.random.choice(cat_values,
-#                                            p=[p + (p_original/(len(cat_values)-1)) if cat_values[i] != original_value else 0
-#                                               for i, p in enumerate(distributions_cat[masked_column].values())])
-#         elif masked_column in num_columns:
-#             replacement = np.random.normal(distributions_num[masked_column][0], distributions_num[masked_column][1])
-#         row['mask'] = [original_value, masked_column]
-#         row[masked_column] = replacement
-#         return row
-
-#     # Prepare values to impute for faster computation
-#     if mask_type != "remove":
-#         counter_cat = {col: Counter(self.df[col]) for col in cat_columns}
-#         distributions_cat = dict()
-#         for cat_column in cat_columns:
-#             s = sum(counter_cat[cat_column].values())
-#             distributions_cat[cat_column] = {k: v / s for k, v in counter_cat[cat_column].items()}
-#         distributions_num = {col: (self.df[col].mean(), self.df[col].std()) for col in num_columns}
-
-#     # Prepare values to remove for faster computation
-#     if mask_type != "replace":
-#         avg_per_num_col = {col: self.df[col].mean() for col in num_columns}
-
-#     # Apply mask to the dataset
-#     self.df['mask'] = None
-#     if mask_type == "remove":
-#         self.df = self.df.apply(_mask_column, args=(avg_per_num_col,), axis=1)
-#     elif mask_type == "replace":
-#         self.df = self.df.apply(_impute_mask_vector, axis=1)
-#     elif mask_type == "bert":
-#         def _choose_mask_type(row: pd.Series):
-#             p = np.random.rand()
-#             if p < 0.8:
-#                 return _mask_column(row, avg_per_num_col)
-#             elif p < 0.9:
-#                 return _impute_mask_vector(row)
-#             else:
-#                 mask_column = row["maskable_column"]
-#                 original_value = row[mask_column]
-#                 row['mask'] = [original_value, mask_column]
-#                 return row
-
-#         self.df = self.df.apply(_choose_mask_type, axis=1)
-
-#     col_to_stype['mask'] = torch_frame.mask
-#     return col_to_stype
-
-# # Randomly mask a column of each row and store original value and max index
-# def _mask_column(row: pd.Series, avg_per_num_col):
-#     col_to_mask = row["maskable_column"]  # Choose a column randomly
-#     original_value = row[col_to_mask]
-#     row['mask'] = [original_value, col_to_mask]  # Store original value and max index in 'mask' column
-
-#     # row[col_to_mask] = np.nan
-#     # hack to escape nan error in torch_frame
-#     if col_to_mask in avg_per_num_col.keys():
-#         row[col_to_mask] = avg_per_num_col[col_to_mask]
-#     else:
-#         row[col_to_mask] = '[MASK]'
-#     return row
-
 def apply_mask(self: torch_frame.data.Dataset, cat_columns: list[str], num_columns: list[str],
                col_to_stype: dict[str, torch_frame.stype], mask_type: str) -> dict[str, torch_frame.stype]:
     
@@ -288,27 +121,6 @@ def mask_remove(df, avg_per_num_col):
     
     return df
 
-# def mask_replace(df, distributions_cat, distributions_num, cat_columns, num_columns):
-#     for col in cat_columns:
-#         mask = df['maskable_column'] == col
-#         if mask.any():
-#             values = list(distributions_cat[col].keys())
-#             probs = list(distributions_cat[col].values())
-#             df.loc[mask, col] = np.random.choice(values, size=mask.sum(), p=probs)
-
-#             cat_values = list(distributions_cat[masked_column].keys())
-#             p_original = distributions_cat[masked_column][original_value]
-#             replacement = np.random.choice(cat_values,
-#                                            p=[p + (p_original/(len(cat_values)-1)) if cat_values[i] != original_value else 0
-#                                               for i, p in enumerate(distributions_cat[masked_column].values())])
-    
-#     for col in num_columns:
-#         mask = df['maskable_column'] == col
-#         if mask.any():
-#             mean, std = distributions_num[col]
-#             df.loc[mask, col] = np.random.normal(mean, std, size=mask.sum())
-    
-#     return df
 def safe_isnan(x):
     try:
         return np.isnan(x)
@@ -371,39 +183,3 @@ def mask_bert(df, avg_per_num_col, distributions_cat, distributions_num, cat_col
     df.loc[replace_mask] = mask_replace(df.loc[replace_mask], distributions_cat, distributions_num, cat_columns, num_columns)
     
     return df
-
-# def to_adj_nodes_with_times(data):
-#     num_nodes = data.num_nodes
-#     timestamps = torch.zeros((data.edge_index.shape[1], 1)) if data.timestamps is None else data.timestamps.reshape((-1,1))
-#     edges = torch.cat((data.edge_index.T, timestamps), dim=1)
-#     adj_list_out = dict([(i, []) for i in range(num_nodes)])
-#     adj_list_in = dict([(i, []) for i in range(num_nodes)])
-#     for u,v,t in edges:
-#         u,v,t = int(u), int(v), int(t)
-#         adj_list_out[u] += [(v, t)]
-#         adj_list_in[v] += [(u, t)]
-#     return adj_list_in, adj_list_out
-
-# def ports(edge_index, adj_list):
-#     ports = torch.zeros(edge_index.shape[1], 1)
-#     ports_dict = {}
-#     for v, nbs in adj_list.items():
-#         if len(nbs) < 1: continue
-#         a = np.array(nbs)
-#         a = a[a[:, -1].argsort()]
-#         _, idx = np.unique(a[:,[0]],return_index=True,axis=0)
-#         nbs_unique = a[np.sort(idx)][:,0]
-#         for i, u in enumerate(nbs_unique):
-#             ports_dict[(u,v)] = i
-#     for i, e in enumerate(edge_index.T):
-#         ports[i] = ports_dict[tuple(e.numpy())]
-#     return ports
-
-# def add_ports(self):
-#         '''Adds port numberings to the edge features'''
-#         reverse_ports = True
-#         adj_list_in, adj_list_out = to_adj_nodes_with_times(self.)
-#         in_ports = ports(self.edge_index, adj_list_in)
-#         out_ports = [ports(self.edge_index.flipud(), adj_list_out)] if reverse_ports else []
-#         self.edge_attr = torch.cat([self.edge_attr, in_ports] + out_ports, dim=1)
-#         return self

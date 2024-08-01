@@ -13,7 +13,8 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-from .util.mask import PretrainType, set_target_col, apply_mask, create_graph
+from .util.mask import PretrainType, set_target_col, apply_mask
+from .util.graph import create_graph, add_ports
 from .util.split import apply_split
 
 import time
@@ -51,11 +52,12 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], add_ports=False):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
             self.khop_neighbors = khop_neighbors
+            self.timestamp_col = 'Timestamp'
 
             names = [
                 'Timestamp',
@@ -95,35 +97,35 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Amount Received': torch_frame.numerical
             }
             #num_columns = ['Amount Received', 'Amount Paid']
-            num_columns = ['Amount Received']
-            cat_columns = ['Receiving Currency', 'Payment Format']
+            self.num_columns = ['Amount Received']
+            self.cat_columns = ['Receiving Currency', 'Payment Format']
+            self.maskable_columns = self.num_columns + self.cat_columns
             #cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
-            self.df = apply_split(self.df, self.split_type, self.splits, "Timestamp")
+            self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
             
             logger.info(f'Creating graph...')
             start = time.time()
             col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
             logger.info(f'Graph created in {time.time()-start:.2f} seconds.')
 
-            if add_ports:
+            if ports:
+                logger.info(f'Adding ports...')
+                start = time.time()
                 add_ports(self)
                 col_to_stype['in_port'] = stype.numerical
                 col_to_stype['out_port'] = stype.numerical
+                logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
-            # Apply input corruption
             if PretrainType.MASK in pretrain:
                 logger.info(f'Applying mask...')
                 start = time.time()
-                # mask = create_mask(self, num_columns + cat_columns)
-                # self.df["maskable_column"] = mask
-                col_to_stype = apply_mask(self, cat_columns, num_columns, col_to_stype, mask_type)
+                col_to_stype = apply_mask(self, self.cat_columns, self.num_columns, col_to_stype, mask_type)
                 logger.info(f'Mask applied in {time.time()-start:.2f} seconds.')
 
-            # Define target column to predict
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
-            super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
+            super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
 
         def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
             """k-hop sampling.

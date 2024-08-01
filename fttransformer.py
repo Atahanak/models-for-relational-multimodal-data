@@ -37,7 +37,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-torch.set_num_threads(4)
+# workaround for CUDA invalid configuration bug
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
+
 torch.set_float32_matmul_precision('high')
 torch.autograd.set_detect_anomaly(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -146,6 +150,7 @@ def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], masked_d
             root=dataset_path,
             pretrain=pretrain_set,
         )
+    logger.info(f"Materializing dataset...")
     s = time.time()
     dataset.materialize()
     logger.info(f"Materialized in {time.time() - s:.2f} seconds")

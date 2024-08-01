@@ -7,32 +7,16 @@ from datetime import datetime
 import os 
 import os.path as osp 
 
-from torch_frame import TensorFrame
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 import torch 
 import torch.nn as nn
-
-from torch_geometric.transforms import BaseTransform
-from typing import Union
-from torch_geometric.data import Data, HeteroData
+from sklearn.metrics import f1_score
 
 from src.nn.gnn.model import GINe, PNAS
 from src.nn.gnn.decoder import ClassifierHead
 from src.nn.models import TABGNN
 from src.nn.models import TABGNNFused
-from sklearn.metrics import f1_score
-
-
-def addEgoIDs(x, seed_edge_index):
-    
-    device = x.device
-    ids = torch.zeros((x.shape[0], 1), device=device)
-    nodes = torch.unique(seed_edge_index.contiguous().view(-1)).to(device)
-    ids[nodes] = 1 
-    x = torch.cat([x, ids], dim=1)
-
-    return x
-
+from src.utils.batch_processing import graph_inputs, addEgoIDs
 
 def logger_setup():
     # Setup logging
@@ -55,6 +39,7 @@ def create_parser():
     parser.add_argument("--emlps", action='store_true', help="Use emlps in GNN training")
     parser.add_argument("--reverse_mp", action='store_true', help="Use reverse MP in GNN training")
     parser.add_argument("--ego", action='store_true', help="Use ego IDs in GNN training")
+    parser.add_argument("--ports", action='store_true', help="Use ports in GNN training")
     parser.add_argument("--batch_size", default=200, type=int, help="Select the batch size for GNN training")
     parser.add_argument("--n_epochs", default=100, type=int, help="Select the number of epochs for GNN training")
     parser.add_argument('--num_neighs', nargs='+', default=[100,100], help='Pass the number of neighors to be sampled in each hop (descending).')
@@ -70,30 +55,6 @@ def create_parser():
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
 
     return parser
-
-
-def graph_inputs(dataset, batch: TensorFrame, tensor_frame: TensorFrame, mode='train', args=None):
-
-    edges = batch.y[:,-3:]
-    y = batch.y[:, 0].to(torch.long)
-    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, mode)
-    edge_attr = tensor_frame.__getitem__(idx)
-
-    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-    num_nodes = nodes.shape[0]
-    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
-
-    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
-    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
-    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
-    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
-
-    if args.ego:
-        batch_size = len(batch.y)
-        node_feats = addEgoIDs(node_feats, edge_index[:, :batch_size])
-
-    return node_feats, edge_index, edge_attr, y
-
 
 @torch.no_grad()
 def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
@@ -120,8 +81,6 @@ def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
     model.train()
     return f1
 
-
-
 def save_model(model, optimizer, epoch, config, ):
     # Save the model in a dictionary
     torch.save({
@@ -132,7 +91,6 @@ def save_model(model, optimizer, epoch, config, ):
             osp.join(config['experiment_path'], str(epoch)+ '.tar')
             )
     
-
 def create_experiment_path(config):
     """
     Get unique experiment id
@@ -141,7 +99,6 @@ def create_experiment_path(config):
     config['experiment_path'] = osp.join(config['output_path'], 'experiments', run_str)
     os.makedirs(config['experiment_path'])
     return
-
 
 class GNN(nn.Module):
     def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):

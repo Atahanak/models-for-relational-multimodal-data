@@ -16,6 +16,7 @@ from torch_frame.data.stats import StatType
 from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
+from src.datasets import EthereumPhishingTransactions
 from src.nn.models import TABGNNFused
 from src.nn.decoder import MCMHead
 from src.nn.gnn.decoder import LinkPredHead
@@ -42,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 import fire
 
+# workaround for CUDA invalid configuration bug
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
+
 torch.set_float32_matmul_precision('high')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_numerical = num_categorical = num_columns = 0
@@ -55,7 +61,7 @@ def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimize
 
     with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, 'train')
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, 'train', args["ego"])
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)
@@ -96,7 +102,7 @@ def train_lp(dataset, loader, epoch: int, encoder, model, lp_decoder, optimizer,
     with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, _, _, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
+            node_feats, _, _, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train', args["ego"])
             node_feats = node_feats.to(device)
             neigh_edge_index = neigh_edge_index.to(device)
             neigh_edge_attr = neigh_edge_attr.to(device)
@@ -134,7 +140,7 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
     t_n = t_c = 0
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, dataset_name)
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, dataset_name, args["ego"])
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)
@@ -194,7 +200,7 @@ def eval_lp(epoch, dataset, loader: DataLoader, encoder, model, lp_decoder, data
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, _, _, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, dataset_name)
+            node_feats, _, _, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], dataset_name, args["ego"])
             node_feats = node_feats.to(device)
             neigh_edge_index = neigh_edge_index.to(device)
             neigh_edge_attr = neigh_edge_attr.to(device)
@@ -256,7 +262,7 @@ def train(dataset, loader, epoch: int, encoder, model, lp_decoder, mcm_decoder, 
     with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
+            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train', args["ego"])
             node_feats = node_feats.to(device)
             neigh_edge_index = neigh_edge_index.to(device)
             neigh_edge_attr = neigh_edge_attr.to(device)
@@ -325,7 +331,7 @@ def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, datase
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], dataset_name)
+            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], dataset_name, args["ego"])
             node_feats = node_feats.to(device)
             neigh_edge_index = neigh_edge_index.to(device)
             neigh_edge_attr = neigh_edge_attr.to(device)
@@ -434,7 +440,7 @@ def parse_checkpoint(checkpoint: str) -> list[str, int]:
     if match:
         run_id = match.group("run_id")
         epoch = match.group("epoch")
-        print(f'Continuing run_{run_id} using checkpoint file: {checkpoint} from epoch {epoch}')
+        logger.info(f'Continuing run_{run_id} using checkpoint file: {checkpoint} from epoch {epoch}')
         return run_id, int(epoch)
     else:
         raise ValueError('Checkpoint file has invalid format')
@@ -490,22 +496,32 @@ def parse_pretrain_args(pretrain) -> Set[PretrainType]:
     return pretrain_set
 
 def get_dataset(dataset_path: str, pretrain: Set[PretrainType], split_type, data_split, khop_neighbors):
-    dataset = IBMTransactionsAML(
-        root=dataset_path, 
-        pretrain=pretrain,
-        split_type=split_type,
-        splits=data_split, 
-        khop_neighbors=khop_neighbors
-    )
+    if "ibm" in dataset_path:
+        dataset = IBMTransactionsAML(
+            root=dataset_path, 
+            pretrain=pretrain,
+            split_type=split_type,
+            splits=data_split, 
+            khop_neighbors=khop_neighbors,
+            ports=args["ports"]
+        )
+    elif "eth" in dataset_path:
+       dataset = EthereumPhishingTransactions(
+            root=dataset_path, 
+            pretrain=pretrain,
+            split_type=split_type,
+            splits=data_split, 
+            khop_neighbors=khop_neighbors,
+            ports=args["ports"]
+        ) 
+    logger.info(f"Materializing dataset...")
     s = time.time()
     dataset.materialize()
     logger.info(f"Materialized in {time.time() - s:.2f} seconds")
     dataset.df.head(5)
-    global num_numerical, num_categorical, num_columns
-    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-    num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
-    num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp])
-    num_columns = num_numerical + num_categorical + num_t
+    global num_numerical, num_categorical
+    num_numerical = len(dataset.num_columns)
+    num_categorical = len(dataset.cat_columns)
     return dataset
 
 def get_data_loaders(dataset: IBMTransactionsAML, batch_size: int) -> Tuple[DataLoader, DataLoader, DataLoader]:
@@ -557,12 +573,14 @@ def get_model(dataset: IBMTransactionsAML, encoder, channels: int, num_layers: i
     in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
     in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
     model = TABGNNFused(
+        node_dim=1+int(args["ego"]),
         encoder=encoder,
         channels=channels,
         edge_dim=channels*dataset.tensor_frame.num_cols,
         num_layers=num_layers, 
         dropout=dropout,
-        deg=in_degree_histogram
+        deg=in_degree_histogram,
+        reverse_mp=args["reverse_mp"],
     )
     model.to(device)
 
@@ -608,7 +626,8 @@ def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: li
 def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name", save_dir="/path/to/save/",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
          data_split=[0.6, 0.2, 0.2], dropout=0.5, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
-         compile=False, testing=True, wandb_dir="/path/to/wandb", group="", mode="mcm-lp", moo="sum"):
+         compile=False, testing=True, wandb_dir="/path/to/wandb", group="", mode="mcm-lp", moo="sum",
+         ego=False, ports=False, reverse_mp=False):
     global args
     args = {
         'testing': testing,
@@ -628,6 +647,11 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
         'num_layers': num_layers,
         'dropout': dropout,
         'weight_decay': weight_decay,
+        'mode': mode,
+        'moo': moo,
+        'ego': ego,
+        'ports': ports,
+        'reverse_mp': reverse_mp
     }
     logger.info(f"args: {args}")
 
