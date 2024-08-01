@@ -21,6 +21,8 @@ from torch.nn import (
 from torch_geometric.nn import PNAConv
 from torch_geometric.nn import BatchNorm
 
+from ..gnn.model import PNAConvHetero
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,7 @@ class TABGNN(Module):
         node_dim: int = 1,
         nhidden: int = 128,
         edge_dim: int = None,
+        reverse_mp: bool = False,
         # fttransformer parameters
         feedforward_channels: Optional[int] = None,
         nhead: int = 8,
@@ -62,7 +65,7 @@ class TABGNN(Module):
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
             self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
-            self.gnn_backbone.append(PNALayer(channels, nhidden, deg))
+            self.gnn_backbone.append(PNALayer(channels, nhidden, deg, reverse_mp))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -133,22 +136,24 @@ class TABGNN(Module):
         return x, edge_attr, target_edge_attr
 
 class PNALayer(Module):
-    def __init__(self, channels: int, nhidden: int = 128, deg=None):
+    def __init__(self, channels: int, nhidden: int = 128, deg=None, reverse_mp: bool = False):
         super().__init__()
         self.channels = channels
         self.nhidden = nhidden
+        self.reverse_mp = reverse_mp
 
         aggregators = ['mean', 'max', 'min', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
-
-        self.gnn_conv = PNAConv(in_channels=nhidden, 
-                                out_channels=nhidden, 
-                                aggregators=aggregators, 
-                                scalers=scalers, 
-                                edge_dim=nhidden, 
-                                deg=deg,
-                                towers=1
-        )
+        if not self.reverse_mp:
+            self.gnn_conv = PNAConv(in_channels=nhidden, out_channels=nhidden,
+                        aggregators=aggregators, scalers=scalers, deg=deg,
+                        edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
+                        divide_input=False)
+        else:
+            self.gnn_conv = PNAConvHetero(n_hidden=nhidden, in_channels=nhidden, out_channels=nhidden,
+                        aggregators=aggregators, scalers=scalers, deg=deg,
+                        edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
+                        divide_input=False)
         self.gnn_norm = BatchNorm(nhidden)
         self.gnn_edge_update = Sequential(
                 Linear(3 * self.nhidden, self.nhidden),

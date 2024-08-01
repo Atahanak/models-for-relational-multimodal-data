@@ -16,23 +16,28 @@ logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(messa
 
 
 def main(in_path: str, out_path: str):
+
     df = pd.read_csv(in_path)
+    logger.info(f"Number of transactions: {len(df)}")
 
     df.rename(columns={'Account': 'From ID', 'Account.1': 'To ID'}, inplace=True)
+    # create ids
+    df['From ID'] = df['From ID'].astype(str) + df['From Bank'].astype(str)
+    df['To ID'] = df['To ID'].astype(str) + df['To Bank'].astype(str)
     # get all unique items in columns From ID and To ID
     unique_ids = pd.concat([df['From ID'], df['To ID']]).unique()
+    logger.info(f'Number of Unique IDs: {len(unique_ids)}')
+
     # create a mapping from the original ID to a new ID
     id_map = {old_id: new_id for new_id, old_id in enumerate(unique_ids)}
     # replace the original IDs with the new IDs
     df['From ID'] = df['From ID'].apply(lambda x: id_map[x])
     df['To ID'] = df['To ID'].apply(lambda x: id_map[x])
 
-    # Define the format of your timestamp
-    timestamp_format = "%Y/%m/%d %H:%M"
     # Convert the datetime object to Unix time (POSIX time)
+    timestamp_format = "%Y/%m/%d %H:%M"
     format_fn = lambda x: int(datetime.strptime(x, timestamp_format).timestamp())
     df['Timestamp'] = df['Timestamp'].apply(format_fn)
-
 
     df['From Bank'] = df['From Bank'].apply(lambda b: f'B_{b}')
     df['To Bank'] = df['To Bank'].apply(lambda b: f'B_{b}')

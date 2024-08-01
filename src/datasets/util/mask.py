@@ -67,7 +67,6 @@ class PretrainType(Enum):
 #     print(f"Time to create graph: {time.time() - start}")
 #     return col_to_stype
 
-
 def create_graph(self, col_to_stype, src_column, dst_column):
 
     # Convert src and dst columns to tensors directly
@@ -94,15 +93,24 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     # Create train graph
     train_mask = self.df['split'] == 0
     train_mask = torch.tensor(train_mask.to_numpy(), dtype=torch.bool)
-
     train_edge_index = edge_index[:, train_mask]
     train_ids = ids[train_mask]
-    
-    # Create the train graph
     self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=train_ids)
-    
-    # Initialize the sampler
-    self.sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+    self.train_sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+
+    # Create val graph
+    val_mask = val_mask = self.df['split'].isin([0, 1])
+    val_mask = torch.tensor(val_mask.to_numpy(), dtype=torch.bool)
+    val_edge_index = edge_index[:, val_mask]
+    val_ids = ids[val_mask]
+    self.val_graph = torch_geometric.data.Data(x=x, edge_index=val_edge_index, edge_attr=val_ids)
+    self.val_sampler = NeighborSampler(self.val_graph, num_neighbors=self.khop_neighbors)
+
+    # Create test graph
+    test_edge_index = edge_index
+    test_ids = ids
+    self.test_graph = torch_geometric.data.Data(x=x, edge_index=test_edge_index, edge_attr=test_ids)
+    self.test_sampler = NeighborSampler(self.test_graph, num_neighbors=self.khop_neighbors)
 
     # Update col_to_stype
     col_to_stype['link'] = torch_frame.relation
@@ -124,13 +132,18 @@ def create_mask(self, maskable_columns: list[str]):
         #         mask[i] = np.random.choice(maskable_columns)
         np.save(dir_masked_columns, mask)
     return mask
-
+    
 def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
                    col_to_stype: dict[str, torch_frame.stype], supervised_col: str) -> dict[str, torch_frame.stype]:
     # Handle supervised column
     if not pretrain:
-        col_to_stype[supervised_col] = torch_frame.categorical
-        self.target_col = supervised_col
+        # !!! self.df['Is Laundering'] column stores strings "0" and "1".
+        #self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)]) + self.df['link'] 
+        self.df['target'] = self.df.apply(lambda row: [float(row[supervised_col])] + row['link'], axis=1)
+        self.target_col = 'target'
+        col_to_stype['target'] = torch_frame.relation
+        self.df = self.df.drop(columns=['link'])
+        del col_to_stype['link']
         return col_to_stype
 
     # Handle pretrain columns
@@ -358,3 +371,39 @@ def mask_bert(df, avg_per_num_col, distributions_cat, distributions_num, cat_col
     df.loc[replace_mask] = mask_replace(df.loc[replace_mask], distributions_cat, distributions_num, cat_columns, num_columns)
     
     return df
+
+# def to_adj_nodes_with_times(data):
+#     num_nodes = data.num_nodes
+#     timestamps = torch.zeros((data.edge_index.shape[1], 1)) if data.timestamps is None else data.timestamps.reshape((-1,1))
+#     edges = torch.cat((data.edge_index.T, timestamps), dim=1)
+#     adj_list_out = dict([(i, []) for i in range(num_nodes)])
+#     adj_list_in = dict([(i, []) for i in range(num_nodes)])
+#     for u,v,t in edges:
+#         u,v,t = int(u), int(v), int(t)
+#         adj_list_out[u] += [(v, t)]
+#         adj_list_in[v] += [(u, t)]
+#     return adj_list_in, adj_list_out
+
+# def ports(edge_index, adj_list):
+#     ports = torch.zeros(edge_index.shape[1], 1)
+#     ports_dict = {}
+#     for v, nbs in adj_list.items():
+#         if len(nbs) < 1: continue
+#         a = np.array(nbs)
+#         a = a[a[:, -1].argsort()]
+#         _, idx = np.unique(a[:,[0]],return_index=True,axis=0)
+#         nbs_unique = a[np.sort(idx)][:,0]
+#         for i, u in enumerate(nbs_unique):
+#             ports_dict[(u,v)] = i
+#     for i, e in enumerate(edge_index.T):
+#         ports[i] = ports_dict[tuple(e.numpy())]
+#     return ports
+
+# def add_ports(self):
+#         '''Adds port numberings to the edge features'''
+#         reverse_ports = True
+#         adj_list_in, adj_list_out = to_adj_nodes_with_times(self.)
+#         in_ports = ports(self.edge_index, adj_list_in)
+#         out_ports = [ports(self.edge_index.flipud(), adj_list_out)] if reverse_ports else []
+#         self.edge_attr = torch.cat([self.edge_attr, in_ports] + out_ports, dim=1)
+#         return self

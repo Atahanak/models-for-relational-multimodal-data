@@ -13,7 +13,7 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, create_mask
+from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, ports
 from .util.split import apply_split
 
 import time
@@ -51,7 +51,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], add_ports=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -91,11 +91,12 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
                 'Timestamp': torch_frame.timestamp,
-                'Amount Paid': torch_frame.numerical,
-                #'Amount Received': torch_frame.numerical
+                # 'Amount Paid': torch_frame.numerical,
+                'Amount Received': torch_frame.numerical
             }
             #num_columns = ['Amount Received', 'Amount Paid']
-            num_columns = ['Amount Paid']
+            num_columns = ['Amount Received']
+            #cat_columns = ['Receiving Currency', 'Payment Format']
             cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
@@ -105,6 +106,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             start = time.time()
             col_to_stype = create_graph(self, col_to_stype, "From ID", "To ID")
             logger.info(f'Graph created in {time.time()-start} seconds.')
+
+            if add_ports:
+                add_ports(self)
+                col_to_stype['in_port'] = stype.numerical
+                col_to_stype['out_port'] = stype.numerical
 
             # Apply input corruption
             if PretrainType.MASK in pretrain:
@@ -119,7 +125,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
 
-        def sample_neighbors(self, edges, train=True) -> (torch.Tensor, torch.Tensor):
+        def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
             """k-hop sampling.
             
             If k-hop sampling, this method **guarantees** that the first 
@@ -138,15 +144,28 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             -------
             pd.DataFrame
                 Sampled edge data
+
+                data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
+                sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
             edges = torch.tensor(edges, dtype=torch.int)
             row = edges[:, 0]
             col = edges[:, 1]
             idx = edges[:, 2] 
             input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
-            out = self.sampler.sample_from_edges(input)
             
-            perm = self.sampler.edge_permutation 
+            if mode == 'train':
+                out = self.train_sampler.sample_from_edges(input)
+                perm = self.train_sampler.edge_permutation 
+            elif mode == 'val':
+                out = self.val_sampler.sample_from_edges(input)
+                perm = self.val_sampler.edge_permutation 
+            elif mode =='test':
+                out = self.test_sampler.sample_from_edges(input)
+                perm = self.test_sampler.edge_permutation 
+            else:
+                raise ValueError("Mode is incorrect! ['train', 'val', 'test']")
+
             e_id = perm[out.edge] if perm is not None else out.edge
 
             is_new_edge = ~torch.isin(e_id, idx)

@@ -18,16 +18,7 @@ from torch.nn import (
     TransformerEncoderLayer,
 )
 
-from src.datasets.util.mask import PretrainType
-import torch_frame
-from torch_frame import TensorFrame, stype
-from torch_frame.data.stats import StatType
-from torch_frame.nn.encoder.stype_encoder import (
-    EmbeddingEncoder,
-    LinearEncoder,
-    StypeEncoder,
-    TimestampEncoder
-)
+from ..gnn.model import PNAConvHetero
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 from torch_geometric.nn import PNAConv
@@ -81,6 +72,7 @@ class TABGNNFused(Module):
         node_dim: int = 1,
         nhidden: int = 128,
         edge_dim: int = None,
+        reverse_mp: bool = False,
         # fttransformer parameters
         feedforward_channels: Optional[int] = None,
         nhead: int = 8,
@@ -96,6 +88,7 @@ class TABGNNFused(Module):
         self.nhidden = nhidden
         self.edge_dim = edge_dim + channels
         self.encoder = encoder
+        self.reverse_mp = reverse_mp
 
         # fttransformer
         self.cls_embedding = Parameter(torch.empty(channels))
@@ -125,7 +118,8 @@ class TABGNNFused(Module):
                     dropout, 
                     activation, 
                     nhidden,
-                    deg
+                    deg,
+                    self.reverse_mp
                 )
             )
         self.reset_parameters()
@@ -197,7 +191,7 @@ class TABGNNFused(Module):
         return x_gnn, edge_attr, target_edge_attr
 
 class FTTransformerPNAFusedLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128, deg=None):
+    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128, deg=None, reverse_mp: bool = False) -> None:
         super().__init__()
         self.channels = channels
         #nhidden = int((nhidden // 5) * 5)
@@ -222,14 +216,17 @@ class FTTransformerPNAFusedLayer(Module):
         aggregators = ['mean', 'max', 'min', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
 
-        self.gnn_conv = PNAConv(in_channels=nhidden, 
-                                out_channels=nhidden, 
-                                aggregators=aggregators, 
-                                scalers=scalers, 
-                                edge_dim=nhidden, 
-                                deg=deg,
-                                towers=1
-        )
+        if not reverse_mp:
+            self.gnn_conv = PNAConv(in_channels=nhidden, out_channels=nhidden,
+                        aggregators=aggregators, scalers=scalers, deg=deg,
+                        edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
+                        divide_input=False)
+        else:
+            self.gnn_conv = PNAConvHetero(n_hidden=nhidden, in_channels=nhidden, out_channels=nhidden,
+                        aggregators=aggregators, scalers=scalers, deg=deg,
+                        edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
+                        divide_input=False)
+
         self.gnn_norm = BatchNorm(nhidden)
         self.gnn_edge_update = Sequential(
                 Linear(3 * self.nhidden, self.nhidden),
@@ -286,60 +283,3 @@ class FTTransformerPNAFusedLayer(Module):
             pooled_emb = summed_emb / counts.unsqueeze(1).float()
             x_gnn[unique_indices] = (x_gnn[unique_indices] + pooled_emb) / 2
         return x_tab, x_gnn, edge_attr
-    
-class FTTransformerPNAParallelLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128, deg=None):
-        super().__init__()
-        self.channels = channels
-        #nhidden = int((nhidden // 5) * 5)
-        self.nhidden = nhidden
-
-        # fttransformer
-        self.tab_conv = TransformerEncoderLayer(
-            d_model=channels,
-            nhead=nhead,
-            dim_feedforward=feedforward_channels or channels,
-            dropout=dropout,
-            activation=activation,
-            # Input and output tensors are provided as
-            # [batch_size, seq_len, channels]
-            batch_first=True,
-        )
-        self.tab_norm = LayerNorm(channels)
-
-        # PNA
-        aggregators = ['mean', 'max', 'min', 'std']
-        scalers = ['identity', 'amplification', 'attenuation']
-
-        self.gnn_conv = PNAConv(in_channels=nhidden, 
-                                out_channels=nhidden, 
-                                aggregators=aggregators, 
-                                scalers=scalers, 
-                                edge_dim=nhidden, 
-                                deg=deg,
-                                towers=1
-        )
-
-        self.gnn_norm = BatchNorm(nhidden)
-        self.gnn_edge_update = Sequential(
-            Linear(3 * self.nhidden, self.nhidden),
-            ReLU(),
-            Linear(self.nhidden, self.nhidden),
-        )
-        self.reset_parameters()
-    
-    def reset_parameters(self):
-        for p in self.tab_conv.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
-        self.tab_norm.reset_parameters()
-        self.gnn_conv.reset_parameters()
-        self.gnn_norm.reset_parameters()
-
-    def forward(self, x_tab, x_gnn, edge_index, edge_attr, target_edge_index=None, lp=False):
-       x_tab = (x_tab + self.tab_norm(self.tab_conv(x_tab)) / 2)
-       x_gnn = (x_gnn + F.relu(self.gnn_norm(self.gnn_conv(x_gnn, edge_index, edge_attr)))) / 2
-       src, dst = edge_index
-       edge_attr = (edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1))) / 2
-       return x_tab, x_gnn, edge_attr
-
