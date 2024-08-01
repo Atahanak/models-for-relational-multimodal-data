@@ -164,7 +164,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 out = self.test_sampler.sample_from_edges(input)
                 perm = self.test_sampler.edge_permutation 
             else:
-                raise ValueError("Mode is incorrect! ['train', 'val', 'test']")
+                raise ValueError("Invalid sampling mode! Valid values: ['train', 'val', 'test']")
 
             e_id = perm[out.edge] if perm is not None else out.edge
 

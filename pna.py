@@ -94,7 +94,7 @@ def train_lp(dataset, loader, epoc: int, encoder, model, lp_decoder, optimizer, 
     with tqdm(loader, desc=f'Epoch {epoc}') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"])
+            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], "train")
             node_feats = node_feats.to(device)
             input_edge_index = input_edge_index.to(device)
             input_edge_attr = input_edge_attr.to(device)
@@ -140,7 +140,7 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset)
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, dataset_name)
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)
@@ -203,7 +203,7 @@ def eval_lp(epoch, dataset, loader: DataLoader, encoder, model, lp_decoder, data
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"])
+            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], dataset_name)
             node_feats = node_feats.to(device)
             input_edge_index = input_edge_index.to(device)
             input_edge_attr = input_edge_attr.to(device)
@@ -349,7 +349,7 @@ def eval(epoch, dataset, loader, encoder, model, lp_decoder, mcm_decoder, datase
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], 'train')
+            node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], dataset_name)
             node_feats = node_feats.to(device)
             neigh_edge_index = neigh_edge_index.to(device)
             neigh_edge_attr = neigh_edge_attr.to(device)
