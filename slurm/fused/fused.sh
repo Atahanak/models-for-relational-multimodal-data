@@ -23,8 +23,9 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate rel-mm
 
-srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group LI-Small,fused,mcm-lp,sum --run_name LI-Small,fused,mcm-lp,sum --epochs 30
-srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group HI-Small,fused,mcm-lp,sum --run_name HI-Small,fused,mcm-lp,sum --epochs 30
+#srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/LI-Small_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group LI-Small,fused,mcm-lp,sum --run_name LI-Small,fused,mcm-lp,sum --epochs 30
+#srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans-c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group HI-Small,fused,mcm-lp,sum --run_name HI-Small,fused,mcm-lp,sum --epochs 30
+srun python /home/$USER/models-for-relational-multimodal-data/fused.py --dataset /scratch/takyildiz/ibm-transactions-for-anti-money-laundering-aml/HI-Medium_Trans_c.csv --wandb_dir /scratch/takyildiz/ --save_dir /scratch/takyildiz/ --testing False --group HM,fused,mcm-lp,sum --run_name HM,fused,mcm-lp,sum --epochs 21 --checkpoint run_bbdi2har_epoch_9.pth
 
 conda deactivate
 
