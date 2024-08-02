@@ -6,7 +6,30 @@ from torch_frame import stype
 
 from src.primitives import negative_sampling
 
-def mcm_inputs(tf: TensorFrame, dataset, mode = 'train'):
+
+def graph_inputs(dataset, batch: TensorFrame, tensor_frame: TensorFrame, mode='train', args=None):
+
+    edges = batch.y[:,-3:]
+    y = batch.y[:, 0].to(torch.long)
+    khop_source, khop_destination, idx = dataset.sample_neighbors(edges, mode)
+    edge_attr = tensor_frame.__getitem__(idx)
+
+    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+    num_nodes = nodes.shape[0]
+    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
+
+    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+
+    if args.ego:
+        batch_size = len(batch.y)
+        node_feats = addEgoIDs(node_feats, edge_index[:, :batch_size])
+
+    return node_feats, edge_index, edge_attr, y
+
+def mcm_inputs(tf: TensorFrame, dataset, mode = 'train', ego=False):
     batch_size = len(tf.y)
     edges = tf.y[:,-3:]
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, mode)
@@ -17,20 +40,21 @@ def mcm_inputs(tf: TensorFrame, dataset, mode = 'train'):
     num_nodes = nodes.shape[0]
     node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
 
+
     n_id_map = {value.item(): index for index, value in enumerate(nodes)}
     vectorized_map = np.vectorize(lambda x: n_id_map[x])
     khop_combined = torch.cat((khop_source, khop_destination))
     local_khop_combined = torch.LongTensor(vectorized_map(khop_combined.numpy()))
     local_khop_source, local_khop_destination = local_khop_combined.split(khop_source.size(0))
     edge_index = torch.stack((local_khop_source, local_khop_destination))
+    if ego:
+        node_feats = addEgoIDs(node_feats, edge_index[:, :batch_size])
 
-    edge_index = edge_index
-    edge_attr  = edge_attr
     target_edge_index = edge_index[:, :batch_size]
     target_edge_attr  = edge_attr[:batch_size]
     return node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr  
     
-def lp_inputs(tf: TensorFrame, dataset, num_neg_samples=64, mode='train'):
+def lp_inputs(tf: TensorFrame, dataset, num_neg_samples=64, mode='train', ego=False):
     edges = tf.y[:,-3:]
     batch_size = len(edges)
     khop_source, khop_destination, idx = dataset.sample_neighbors(edges, mode)
@@ -47,6 +71,9 @@ def lp_inputs(tf: TensorFrame, dataset, num_neg_samples=64, mode='train'):
     local_khop_combined = torch.LongTensor(vectorized_map(khop_combined.numpy()))
     local_khop_source, local_khop_destination = local_khop_combined.split(khop_source.size(0))
     edge_index = torch.stack((local_khop_source, local_khop_destination))
+
+    if ego:
+        node_feats = addEgoIDs(node_feats, edge_index[:, :batch_size])
 
     neigh_edge_index = edge_index[:, batch_size:]
     neigh_edge_attr  = edge_attr[batch_size:]
@@ -71,3 +98,12 @@ def lp_inputs(tf: TensorFrame, dataset, num_neg_samples=64, mode='train'):
     neg_edge_index = torch.tensor(neg_edge_index, dtype=torch.long)
     target_edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=1)
     return node_feats, edge_index, edge_attr, neigh_edge_index, neigh_edge_attr, target_edge_index, target_edge_attr
+
+
+def addEgoIDs(x, seed_edge_index):
+    device = x.device
+    ids = torch.zeros((x.shape[0], 1), device=device)
+    nodes = torch.unique(seed_edge_index.contiguous().view(-1)).to(device)
+    ids[nodes] = 1 
+    x = torch.cat([x, ids], dim=1)
+    return x

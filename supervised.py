@@ -16,6 +16,11 @@ from src.datasets import IBMTransactionsAML
 from sklearn.metrics import f1_score
 from utils import *
 
+# workaround for CUDA invalid configuration bug
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
+
 parser = create_parser()
 args = parser.parse_args()
 
@@ -31,6 +36,7 @@ config={
     "emlps": args.emlps, 
     "reverse_mp": args.reverse_mp,
     "ego": args.ego,
+    "ports": args.ports,
     "lr": 5e-4,
     "n_hidden": 64,
     "n_gnn_layers": 2,
@@ -58,7 +64,8 @@ dataset = IBMTransactionsAML(
     root=config['data'],
     split_type='temporal_daily', 
     splits=[0.6, 0.2, 0.2], 
-    khop_neighbors=args.num_neighs
+    khop_neighbors=args.num_neighs,
+    ports=args.ports
 )
 dataset.materialize()
 

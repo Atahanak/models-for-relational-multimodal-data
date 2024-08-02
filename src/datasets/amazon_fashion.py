@@ -18,7 +18,8 @@ from torch_geometric.sampler import EdgeSamplerInput
 from torch_frame.config.text_embedder import TextEmbedderConfig
 from torch_frame.config.text_tokenizer import TextTokenizerConfig
 
-from src.datasets.util.mask import PretrainType, set_target_col, create_graph, apply_mask, create_mask
+from .util.mask import PretrainType, set_target_col, apply_mask
+from .util.graph import create_graph, add_ports
 from src.datasets.util.split import apply_split
 
 class AmazonFashionDataset(torch_frame.data.Dataset):
@@ -58,7 +59,7 @@ class AmazonFashionDataset(torch_frame.data.Dataset):
             nrows=None,
             mask_type="replace",
             pretrain=True,
-            masked_dir=".cache/masked_columns"
+            ports=False
             ):
         if pretrain is None:
             pretrain = {PretrainType.MASK, PretrainType.LINK_PRED}

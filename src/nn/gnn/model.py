@@ -195,7 +195,7 @@ class PNAS(torch.nn.Module):
 class PNA(torch.nn.Module):
     def __init__(self, num_features, num_gnn_layers, n_classes=2, 
                 n_hidden=128, edge_updates=True,
-                edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None, encoder=None):
+                edge_dim=None, dropout=0.0, final_dropout=0.5, deg=None, encoder=None, reverse_mp=False):
         super().__init__()
         #n_hidden = int((n_hidden // 5) * 5)
         self.n_hidden = n_hidden
@@ -203,6 +203,7 @@ class PNA(torch.nn.Module):
         self.edge_updates = edge_updates
         self.final_dropout = final_dropout
         self.encoder = encoder
+        self.reverse_mp = reverse_mp
 
         aggregators = ['mean', 'min', 'max', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
@@ -214,10 +215,16 @@ class PNA(torch.nn.Module):
         self.emlps = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         for _ in range(self.num_gnn_layers):
-            conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
-                        aggregators=aggregators, scalers=scalers, deg=deg,
-                        edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
-                        divide_input=False)
+            if self.reverse_mp:
+                conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
+                            aggregators=aggregators, scalers=scalers, deg=deg,
+                            edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
+                            divide_input=False)
+            else:
+                conv = PNAConvHetero(n_hidden=n_hidden, in_channels=n_hidden, out_channels=n_hidden,
+                            aggregators=aggregators, scalers=scalers, deg=deg,
+                            edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
+                            divide_input=False)
             if self.edge_updates: self.emlps.append(nn.Sequential(
                 nn.Linear(3 * self.n_hidden, self.n_hidden),
                 nn.ReLU(),

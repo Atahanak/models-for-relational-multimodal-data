@@ -5,6 +5,7 @@ learning models.
 """
 import os
 import re
+import time
 from typing import Optional, Tuple, Set
 
 import fire
@@ -36,7 +37,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-torch.set_num_threads(4)
+# workaround for CUDA invalid configuration bug
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
+
 torch.set_float32_matmul_precision('high')
 torch.autograd.set_detect_anomaly(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -90,14 +95,14 @@ def init_wandb(args: dict, run_name: str, wandb_dir: str, run_id: Optional[str],
         entity="cse3000",
         dir=wandb_dir,
         mode="disabled" if args['testing'] else "online",
-        project="exp",
+        project="iclr",
         name=run_name,
         config=args,
         id=run_id if run_id is not None else None,    
         resume="must" if run_id is not None else None,
         group=group if group is not None else None,
     )
-    wandb.log({"device": str(device)})
+    wandb.log({"device": str(device)}, step=0)
     return run
 
 
@@ -144,8 +149,11 @@ def prepare_dataset(dataset_path: str, pretrain_set: Set[PretrainType], masked_d
        dataset = EthereumPhishingTransactions(
             root=dataset_path,
             pretrain=pretrain_set,
-        ) 
+        )
+    logger.info(f"Materializing dataset...")
+    s = time.time()
     dataset.materialize()
+    logger.info(f"Materialized in {time.time() - s:.2f} seconds")
     global num_numerical, num_categorical, num_columns, num_cat
     num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in dataset.tensor_frame.col_names_dict else 0
     num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in dataset.tensor_frame.col_names_dict else 0 
@@ -176,7 +184,7 @@ def setup_data_loaders(dataset: IBMTransactionsAML, batch_size: int) -> Tuple[Da
         "train_loader size": len(train_loader),
         "val_loader size": len(val_loader),
         "test_loader size": len(test_loader)
-    })
+    }, step=0)
     return train_loader, val_loader, test_loader
 
 
@@ -236,7 +244,7 @@ def setup_optimizer(model: torch.nn.Module, lr: float, eps: float, weight_decay:
     # scheduler = get_inverse_sqrt_schedule(optimizer, num_warmup_steps=0, timescale=1000)
     learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Learnable parameters: {learnable_params}")
-    wandb.log({"learnable_params": learnable_params})
+    wandb.log({"learnable_params": learnable_params}, step=0)
     return optimizer
 
 
@@ -278,10 +286,9 @@ def train(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mo
             t.set_postfix(loss=f'{loss_accum / total_count:.4f}',
                           loss_c=f'{loss_c_accum / t_c:.4f}',
                           loss_n=f'{loss_n_accum / t_n:.4f}')
-            wandb.log({"train_loss_mcm": loss_accum / total_count,
-                       "train_loss_c": loss_c_accum / t_c,
-                       "train_loss_n": loss_n_accum / t_n,
-                       "epoch": epoch})
+        wandb.log({"train_loss_mcm": loss_accum / total_count,
+                    "train_loss_c": loss_c_accum / t_c,
+                    "train_loss_n": loss_n_accum / t_n}, step=epoch)
     return ((loss_c_accum / t_c) * (num_cat / num_columns)) + ((loss_n_accum / t_n) * (num_numerical / num_columns))
 
 
@@ -330,9 +337,6 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
                           ((loss_n_accum / t_n) * (num_numerical / num_columns)))
             loss_c = loss_c_accum / t_c
             loss_n = loss_n_accum / t_n
-            wandb.log({f"{dataset_name}_loss_mcm": loss_c_mcm,
-                       f"{dataset_name}_loss_c": loss_c,
-                       f"{dataset_name}_loss_n": loss_n})
 
             acc = accum_acc / t_c
             rmse = torch.sqrt(accum_l2 / t_n)
@@ -350,7 +354,7 @@ def test(encoder: torch.nn.Module, model: torch.nn.Module, decoder: torch.nn.Mod
                    f"{dataset_name}_loss_c_mcm": loss_c_mcm,
                    f"{dataset_name}_loss_c": loss_c_accum / t_c,
                    f"{dataset_name}_loss_n": loss_n_accum / t_n,
-                   "epoch": epoch})
+                   "epoch": epoch}, step=epoch)
         return [rmse, acc]
 
 

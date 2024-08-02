@@ -13,7 +13,9 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-from .util.mask import PretrainType, set_target_col, apply_mask, create_graph, create_mask
+
+from .util.mask import PretrainType, set_target_col, apply_mask
+from .util.graph import create_graph, add_ports
 from .util.split import apply_split
 
 import time
@@ -51,11 +53,12 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             root (str): Root directory of the dataset.
             preetrain (bool): Whether to use the pretrain split or not (default: False).
         """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], masked_dir="/tmp/.cache/masked_columns"):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
             self.khop_neighbors = khop_neighbors
+            self.timestamp_col = 'block_timestamp'
 
             names = [
                 'nonce',
@@ -99,12 +102,20 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             #cat_columns = ['transaction_index']
             cat_columns = []
 
-            self.df = apply_split(self.df, self.split_type, self.splits, "block_timestamp")
+            self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
             
             logger.info(f'Creating graph...')
             start = time.time()
             col_to_stype = create_graph(self, col_to_stype, "from_address", "to_address")
             logger.info(f'Graph created in {time.time()-start} seconds.')
+
+            if ports:
+                logger.info(f'Adding ports...')
+                start = time.time()
+                add_ports(self)
+                col_to_stype['in_port'] = stype.numerical
+                col_to_stype['out_port'] = stype.numerical
+                logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
                 logger.info(f'Applying mask...')
