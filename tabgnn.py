@@ -138,7 +138,7 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, dataset_name, args["ego"])
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)
@@ -676,7 +676,7 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
 
     encoder = dataset.get_encoder(channels)
     model = get_model(dataset, encoder, channels, num_layers, compile, checkpoint, dropout)
-    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else []
+    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical] if col in dataset.cat_columns] if stype.categorical in dataset.tensor_frame.col_names_dict else []
     mcm_decoder = MCMHead(channels, num_numerical, num_categorical, w=3).to(device)
     lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
 
