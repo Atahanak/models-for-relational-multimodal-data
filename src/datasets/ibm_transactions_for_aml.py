@@ -87,20 +87,21 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                # 'From Bank': torch_frame.categorical,
-                # 'To Bank': torch_frame.categorical,
-                # 'Payment Currency': torch_frame.categorical,
+                'From Bank': torch_frame.categorical,
+                'To Bank': torch_frame.categorical,
+                'Payment Currency': torch_frame.categorical,
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
                 'Timestamp': torch_frame.timestamp,
-                # 'Amount Paid': torch_frame.numerical,
-                'Amount Received': torch_frame.numerical
+                'Amount Paid': torch_frame.numerical,
+                #'Amount Received': torch_frame.numerical
             }
             #num_columns = ['Amount Received', 'Amount Paid']
-            self.num_columns = ['Amount Received']
-            self.cat_columns = ['Receiving Currency', 'Payment Format']
+            #self.num_columns = ['Amount Received']
+            self.num_columns = ['Amount Paid']
+            #self.cat_columns = ['Receiving Currency', 'Payment Format']
+            self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
             self.maskable_columns = self.num_columns + self.cat_columns
-            #cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
