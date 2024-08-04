@@ -160,7 +160,7 @@ class PNAS(torch.nn.Module):
         self.emlps = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         for _ in range(self.num_gnn_layers):
-            if self.reverse_mp:
+            if not self.reverse_mp:
                 conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
                             aggregators=aggregators, scalers=scalers, deg=deg,
                             edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
@@ -215,7 +215,7 @@ class PNA(torch.nn.Module):
         self.emlps = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         for _ in range(self.num_gnn_layers):
-            if self.reverse_mp:
+            if not self.reverse_mp:
                 conv = PNAConv(in_channels=n_hidden, out_channels=n_hidden,
                             aggregators=aggregators, scalers=scalers, deg=deg,
                             edge_dim=n_hidden, towers=1, pre_layers=1, post_layers=1,
@@ -235,11 +235,10 @@ class PNA(torch.nn.Module):
 
         # self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, dropout=final_dropout)
 
-    def forward(self, x, edge_index, edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr):
+    def forward(self, x, edge_index, edge_attr, target_edge_attr):
         x = self.node_emb(x)
         edge_attr = self.edge_emb(edge_attr)
-        pos_edge_attr = self.edge_emb(pos_edge_attr)
-        neg_edge_attr = self.edge_emb(neg_edge_attr)
+        target_edge_attr = self.edge_emb(target_edge_attr)
 
         for i in range(self.num_gnn_layers):
             x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
@@ -247,7 +246,7 @@ class PNA(torch.nn.Module):
                 src, dst = edge_index
                 edge_attr = edge_attr + self.emlps[i](torch.cat([x[src], x[dst], edge_attr], dim=-1)) / 2
 
-        return x, pos_edge_attr, neg_edge_attr
+        return x, edge_attr, target_edge_attr
         #return self.decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
     
     def loss_fn(self, input1, input2):
