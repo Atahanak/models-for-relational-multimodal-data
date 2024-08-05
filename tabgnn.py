@@ -15,6 +15,7 @@ from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
 from src.datasets import EthereumPhishingTransactions
+from src.datasets import RelHM
 from src.nn.models import TABGNN
 from src.nn.decoder import MCMHead
 from src.nn.gnn.decoder import LinkPredHead
@@ -522,6 +523,17 @@ def get_dataset(dataset_path: str, pretrain: Set[PretrainType], split_type, data
             khop_neighbors=khop_neighbors,
             ports=args["ports"]
         ) 
+    elif "rel-hm" in dataset_path:
+        dataset = RelHM(
+            root=dataset_path, 
+            pretrain=pretrain,
+            split_type=split_type,
+            splits=data_split, 
+            khop_neighbors=khop_neighbors,
+            ports=args["ports"]
+        )
+    else:
+        raise ValueError(f"Dataset not supported: {dataset_path}")
     logger.info(f"Materializing dataset...")
     s = time.time()
     dataset.materialize()

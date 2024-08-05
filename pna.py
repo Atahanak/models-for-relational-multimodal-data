@@ -15,6 +15,7 @@ from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
 from src.datasets import EthereumPhishingTransactions
+from src.datasets import RelHM
 from src.nn.gnn import PNA, PNAS
 from src.nn.decoder import MCMHead
 from src.nn.gnn.decoder import LinkPredHead
@@ -109,10 +110,10 @@ def train_lp(dataset, loader, epoch: int, encoder, model, lp_decoder, optimizer,
             target_edge_index = target_edge_index.to(device)
             target_edge_attr = target_edge_attr.to(device)
 
-            # target_edge_attr, _ = encoder(target_edge_attr)
-            # target_edge_attr = target_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
-            # input_edge_attr, _ = encoder(input_edge_attr)
-            # input_edge_attr = input_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
+            target_edge_attr, _ = encoder(target_edge_attr)
+            target_edge_attr = target_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
+            input_edge_attr, _ = encoder(input_edge_attr)
+            input_edge_attr = input_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
             x, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_attr)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
@@ -528,6 +529,17 @@ def get_dataset(dataset_path: str, pretrain: Set[PretrainType], split_type, data
             khop_neighbors=khop_neighbors,
             ports=args["ports"]
         ) 
+    elif "rel-hm" in dataset_path:
+        dataset = RelHM(
+            root=dataset_path, 
+            pretrain=pretrain,
+            split_type=split_type,
+            splits=data_split, 
+            khop_neighbors=khop_neighbors,
+            ports=args["ports"]
+        )
+    else:
+        raise ValueError(f"Dataset not supported: {dataset_path}")
     logger.info(f"Materializing dataset...")
     s = time.time()
     dataset.materialize()
