@@ -13,7 +13,6 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-
 from .util.mask import PretrainType, set_target_col, create_mask
 from .util.graph import create_graph, add_ports
 from .util.split import apply_split
@@ -32,84 +31,95 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class EthereumPhishingTransactions(torch_frame.data.Dataset):
-        r"""`"Realistic Synthetic Financial Transactions for Anti-Money Laundering Models" https://arxiv.org/pdf/2306.16424.pdf`_.
-        
-        IBM Transactions for Anti-Money Laundering (AML) dataset.
-        The dataset contains 10 columns:
-        - Timestamp: The timestamp of the transaction.
-        - From Bank: The bank from which the transaction is made.
-        - From ID: The ID of the sender.
-        - To Bank: The bank to which the transaction is made.
-        - To ID: The ID of the receiver.
-        - Amount Received: The amount received by the receiver.
-        - Receiving Currency: The currency in which the amount is received.
-        - Amount Paid: The amount paid by the sender.
-        - Payment Currency: The currency in which the amount is paid.
-        - Payment Format: The format of the payment.
-        - Is Laundering: The label indicating whether the transaction is a money laundering transaction.
-
-        Args:
-            root (str): Root directory of the dataset.
-            preetrain (bool): Whether to use the pretrain split or not (default: False).
-        """
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
+class RelHM(torch_frame.data.Dataset):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal_daily', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
             self.khop_neighbors = khop_neighbors
-            self.timestamp_col = 'block_timestamp'
+            self.timestamp_col = 't_dat'
             self.pretrain = pretrain
             self.mask_type = mask_type
 
             names = [
-                'nonce',
-                'from_address',
-                'to_address',
-                #'transaction_index',
-                'value',
-                'gas',
-                'gas_price',
-                # 'receipt_status',
-                'block_timestamp',
-                # 'phishing',
+                "t_dat", "customer_id", "article_id", "price", "sales_channel_id", "FN", "Active", 
+                "club_member_status", "fashion_news_frequency", "age", "postal_code", "product_code", 
+                "prod_name", "product_type_no", "product_type_name", "product_group_name", 
+                "graphical_appearance_no", "graphical_appearance_name", "colour_group_code", 
+                "colour_group_name", "perceived_colour_value_id", "perceived_colour_value_name", 
+                "perceived_colour_master_id", "perceived_colour_master_name", "department_no", 
+                "department_name", "index_code", "index_name", "index_group_no", "index_group_name", 
+                "section_no", "section_name", "garment_group_no", "garment_group_name", "detail_desc"
             ]
+
             dtypes = {
-                'nonce': 'float64',
-                'from_address': 'float64',
-                'to_address': 'float64',
-                #'transaction_index': 'category',
-                'value': 'float64',
-                'gas': 'float64',
-                'gas_price': 'float64',
-                # 'receipt_status': 'category',
-                'block_timestamp': 'float64',
-                # 'phishing': 'category',
+                "customer_id": "Int64",
+                "article_id": "Int64",
+                "price": "float64",
+                "sales_channel_id": "int64",
+                "FN": "float64",
+                "Active": "float64",
+                "club_member_status": "object",
+                "fashion_news_frequency": "object",
+                "age": "float64",
+                "postal_code": "object",
+                "product_code": "int64",
+                "prod_name": "object",
+                "product_type_no": "int64",
+                "product_type_name": "object",
+                "product_group_name": "object",
+                "graphical_appearance_no": "int64",
+                "graphical_appearance_name": "object",
+                "colour_group_code": "int64",
+                "colour_group_name": "object",
+                "perceived_colour_value_id": "int64",
+                "perceived_colour_value_name": "object",
+                "perceived_colour_master_id": "int64",
+                "perceived_colour_master_name": "object",
+                "department_no": "int64",
+                "department_name": "object",
+                "index_code": "object",
+                "index_name": "object",
+                "index_group_no": "int64",
+                "index_group_name": "object",
+                "section_no": "int64",
+                "section_name": "object",
+                "garment_group_no": "int64",
+                "garment_group_name": "object",
+                "detail_desc": "object"
             }
+            logger.info(f"Reading data from {root}...")
+            self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)
+            logger.info(f"Data read from {root}.")
 
-            self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
-            self.df.reset_index(inplace=True)
-            
             col_to_stype = {
-                'nonce': torch_frame.numerical,
-                #'transaction_index': torch_frame.categorical,
-                'value': torch_frame.numerical,
-                'gas': torch_frame.numerical,
-                'gas_price': torch_frame.numerical,
-                # 'receipt_status': torch_frame.categorical,
-                'block_timestamp': torch_frame.timestamp,
+                't_dat': torch_frame.timestamp,                # Timestamp
+                'price': torch_frame.numerical,                # Numerical
+                'club_member_status': torch_frame.categorical, # Categorical
+                'fashion_news_frequency': torch_frame.categorical, # Categorical
+                'age': torch_frame.numerical,                  # Numerical
+                'postal_code': torch_frame.categorical,        # Categorical
+                'prod_name': torch_frame.categorical,          # Categorical
+                'product_type_name': torch_frame.categorical,  # Categorical
+                'product_group_name': torch_frame.categorical, # Categorical
+                'graphical_appearance_name': torch_frame.categorical, # Categorical
+                'colour_group_name': torch_frame.categorical,  # Categorical
+                'perceived_colour_value_name': torch_frame.categorical, # Categorical
+                'perceived_colour_master_name': torch_frame.categorical, # Categorical
+                'department_name': torch_frame.categorical,    # Categorical
+                'index_name': torch_frame.categorical,         # Categorical
+                'index_group_name': torch_frame.categorical,   # Categorical
+                'section_name': torch_frame.categorical,       # Categorical
+                'garment_group_name': torch_frame.categorical, # Categorical
             }
-            # num_columns = ['nonce', 'value', 'gas', 'gas_price']
-            # #cat_columns = ['receipt_status']
-            # #cat_columns = ['transaction_index']
-            # cat_columns = []
 
+            # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
             
             logger.info(f'Creating graph...')
             start = time.time()
-            col_to_stype = create_graph(self, col_to_stype, "from_address", "to_address")
-            logger.info(f'Graph created in {time.time()-start} seconds.')
+            col_to_stype = create_graph(self, col_to_stype, "customer_id", "article_id")
+            logger.info(f'Graph created in {time.time()-start:.2f} seconds.')
 
             if ports:
                 logger.info(f'Adding ports...')
@@ -120,8 +130,8 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
-                self.num_columns = ['nonce', 'value', 'gas', 'gas_price']
-                self.cat_columns = []
+                self.num_columns = ['price', 'age']
+                self.cat_columns = ['product_type_name',  'prod_name', 'perceived_colour_value_name']
                 self.maskable_columns = self.num_columns + self.cat_columns
                 mask_col = create_mask(self, self.maskable_columns)
                 self.df['maskable_column'] = mask_col
@@ -131,7 +141,7 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             else:
                 self.maskable_columns = None
 
-            col_to_stype = set_target_col(self, pretrain, col_to_stype, "phishing")
+            col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
 
         def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore

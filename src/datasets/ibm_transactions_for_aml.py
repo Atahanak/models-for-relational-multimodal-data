@@ -13,7 +13,7 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 import numpy as np
-from .util.mask import PretrainType, set_target_col, apply_mask
+from .util.mask import PretrainType, set_target_col, create_mask
 from .util.graph import create_graph, add_ports
 from .util.split import apply_split
 
@@ -58,6 +58,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             self.splits = splits
             self.khop_neighbors = khop_neighbors
             self.timestamp_col = 'Timestamp'
+            self.pretrain = pretrain
+            self.mask_type = mask_type
 
             names = [
                 'Timestamp',
@@ -96,12 +98,12 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Amount Paid': torch_frame.numerical,
                 #'Amount Received': torch_frame.numerical
             }
-            #num_columns = ['Amount Received', 'Amount Paid']
-            #self.num_columns = ['Amount Received']
-            self.num_columns = ['Amount Paid']
-            #self.cat_columns = ['Receiving Currency', 'Payment Format']
-            self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
-            self.maskable_columns = self.num_columns + self.cat_columns
+            # #num_columns = ['Amount Received', 'Amount Paid']
+            # #self.num_columns = ['Amount Received']
+            # self.num_columns = ['Amount Paid']
+            # #self.cat_columns = ['Receiving Currency', 'Payment Format']
+            # self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            # self.maskable_columns = self.num_columns + self.cat_columns
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
@@ -120,10 +122,16 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
-                logger.info(f'Applying mask...')
-                start = time.time()
-                col_to_stype = apply_mask(self, self.cat_columns, self.num_columns, col_to_stype, mask_type)
-                logger.info(f'Mask applied in {time.time()-start:.2f} seconds.')
+                self.num_columns = ['Amount Paid']
+                self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+                self.maskable_columns = self.num_columns + self.cat_columns
+                mask_col = create_mask(self, self.maskable_columns)
+                self.df['maskable_column'] = mask_col
+                original_values = self.df.apply(lambda row: row[row['maskable_column']], axis=1)
+                self.df['mask'] = [list(x) for x in zip(original_values, mask_col)]
+                col_to_stype['mask'] = torch_frame.mask
+            else:
+                self.maskable_columns = None
 
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
