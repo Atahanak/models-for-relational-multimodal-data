@@ -15,13 +15,13 @@ from torch_geometric.utils import degree
 
 from src.datasets import IBMTransactionsAML
 from src.datasets import EthereumPhishingTransactions
-from src.nn.gnn import PNA
+from src.nn.gnn import PNA, PNAS
 from src.nn.decoder import MCMHead
 from src.nn.gnn.decoder import LinkPredHead
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
 from src.nn.weighting.MoCo import MoCoLoss
-from src.utils.batch_processing import mcm_inputs, lp_inputs
+from src.utils.batch_processing import mcm_inputs, lp_inputs, graph_inputs
 
 
 from tqdm.auto import tqdm
@@ -67,7 +67,9 @@ def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimize
             target_edge_attr = target_edge_attr.to(device)
             
             edge_attr, _ = encoder(edge_attr)
+            edge_attr = edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
             target_edge_attr, _ = encoder(target_edge_attr)
+            target_edge_attr = target_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
             x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_attr)
             x_target = x[target_edge_index.T].reshape(-1, 2 * args["channels"])#.relu()
             x_target = torch.cat((x_target, target_edge_attr), 1)
@@ -107,21 +109,15 @@ def train_lp(dataset, loader, epoch: int, encoder, model, lp_decoder, optimizer,
             target_edge_index = target_edge_index.to(device)
             target_edge_attr = target_edge_attr.to(device)
 
+            # target_edge_attr, _ = encoder(target_edge_attr)
+            # target_edge_attr = target_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
+            # input_edge_attr, _ = encoder(input_edge_attr)
+            # input_edge_attr = input_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
+            x, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_attr)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
-
-            pos_edge_attr = target_edge_attr[:batch_size,:]
-            pos_edge_attr, _ = encoder(pos_edge_attr)
-            pos_edge_attr = pos_edge_attr.view(-1, num_columns * args["channels"]) 
-
             neg_edge_attr = target_edge_attr[batch_size:,:]
-            neg_edge_attr, _ = encoder(neg_edge_attr)
-            neg_edge_attr = neg_edge_attr.view(-1, num_columns * args["channels"]) 
-
-            input_edge_attr, _ = encoder(input_edge_attr)
-            input_edge_attr = input_edge_attr.view(-1, num_columns * args["channels"]) 
-
-            x, pos_edge_attr, neg_edge_attr = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
+            pos_edge_attr = target_edge_attr[:batch_size,:]
             pos_pred, neg_pred = lp_decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
 
             optimizer.zero_grad()
@@ -145,7 +141,7 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, dataset_name, args["ego"])
+            node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)
@@ -153,7 +149,9 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
             target_edge_attr = target_edge_attr.to(device)
 
             edge_attr, _ = encoder(edge_attr)
+            edge_attr = edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
             target_edge_attr, _ = encoder(target_edge_attr)
+            target_edge_attr = target_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
             x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_attr)
             x_target = x[target_edge_index.T].reshape(-1, 2 * args["channels"])#.relu()
             x_target = torch.cat((x_target, target_edge_attr), 1)
@@ -205,27 +203,22 @@ def eval_lp(epoch, dataset, loader: DataLoader, encoder, model, lp_decoder, data
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
             batch_size = len(tf.y)
-            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], dataset_name, args["ego"])
+            node_feats, _, _, input_edge_index, input_edge_attr, target_edge_index, target_edge_attr = lp_inputs(tf, dataset, args["num_neg_samples"], "train", args["ego"])
             node_feats = node_feats.to(device)
             input_edge_index = input_edge_index.to(device)
             input_edge_attr = input_edge_attr.to(device)
             target_edge_index = target_edge_index.to(device)
             target_edge_attr = target_edge_attr.to(device)
 
+            target_edge_attr, _ = encoder(target_edge_attr)
+            target_edge_attr = target_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"]) 
+            input_edge_attr, _ = encoder(input_edge_attr)
+            input_edge_attr = input_edge_attr.view(-1, dataset.tensor_frame.num_cols * args["channels"])
+            x, edge_attr, target_edge_attr = model(node_feats, input_edge_index, input_edge_attr, target_edge_attr)
             pos_edge_index = target_edge_index[:, :batch_size]
             neg_edge_index = target_edge_index[:, batch_size:]
             pos_edge_attr = target_edge_attr[:batch_size,:]
-            pos_edge_attr, _ = encoder(pos_edge_attr)
-            pos_edge_attr = pos_edge_attr.view(-1, num_columns * args["channels"]) 
-
             neg_edge_attr = target_edge_attr[batch_size:,:]
-            neg_edge_attr, _ = encoder(neg_edge_attr)
-            neg_edge_attr = neg_edge_attr.view(-1, num_columns * args["channels"]) 
-
-            input_edge_attr, _ = encoder(input_edge_attr)
-            input_edge_attr = input_edge_attr.view(-1, num_columns * args["channels"])
-
-            x, pos_edge_attr, neg_edge_attr = model(node_feats, input_edge_index, input_edge_attr, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             pos_pred, neg_pred = lp_decoder(x, pos_edge_index, pos_edge_attr, neg_edge_index, neg_edge_attr)
             loss = ssloss.lp_loss(pos_pred, neg_pred)
             
@@ -541,10 +534,8 @@ def get_dataset(dataset_path: str, pretrain: Set[PretrainType], split_type, data
     logger.info(f"Materialized in {time.time() - s:.2f} seconds")
     dataset.df.head(5)
     global num_numerical, num_categorical, num_columns
-    num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in dataset.tensor_frame.col_names_dict else 0
-    num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in dataset.tensor_frame.col_names_dict else 0 
-    num_t = len(dataset.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in dataset.tensor_frame.col_names_dict else 0
-    num_columns = num_numerical + num_categorical + num_t
+    num_numerical = len(dataset.num_columns)
+    num_categorical = len(dataset.cat_columns)
     return dataset
 
 def get_data_loaders(dataset: IBMTransactionsAML, batch_size: int) -> Tuple[DataLoader, DataLoader, DataLoader]:
@@ -595,17 +586,30 @@ def get_model(dataset: IBMTransactionsAML, encoder, channels: int, num_layers: i
     max_in_degree = int(in_degrees.max())
     in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
     in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+    # if args["mode"] == "lp":
     model = PNA(
-        node_dim=1+int(args["ego"]),
-        num_features=1, 
+        num_features=1+int(args["ego"]),
         num_gnn_layers=num_layers, 
         edge_dim=dataset.tensor_frame.num_cols*channels, 
+        #edge_dim=1, 
         n_classes=1, 
         deg=in_degree_histogram,
         edge_updates=True,
         encoder=encoder,
         reverse_mp=args["reverse_mp"],
     )
+    # elif args["mode"] == "mcm":
+    #     model = PNAS(
+    #         node_dim=1+int(args["ego"]),
+    #         num_features=1, 
+    #         num_gnn_layers=num_layers, 
+    #         edge_dim=dataset.tensor_frame.num_cols*channels, 
+    #         n_classes=1, 
+    #         deg=in_degree_histogram,
+    #         edge_updates=True,
+    #         encoder=encoder,
+    #         reverse_mp=args["reverse_mp"],
+    #     )
     model.to(device)
 
     if checkpoint:
@@ -694,7 +698,7 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
 
     encoder = dataset.get_encoder(channels)
     model = get_model(dataset, encoder, channels, num_layers, compile, checkpoint, dropout)
-    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical]] if stype.categorical in dataset.tensor_frame.col_names_dict else []
+    num_categorical = [len(dataset.col_stats[col][StatType.COUNT][0]) for col in dataset.tensor_frame.col_names_dict[stype.categorical] if col in dataset.cat_columns] if stype.categorical in dataset.tensor_frame.col_names_dict else []
     mcm_decoder = MCMHead(channels, num_numerical, num_categorical, w=3).to(device)
     lp_decoder = LinkPredHead(n_classes=1, n_hidden=channels, dropout=dropout).to(device)
 

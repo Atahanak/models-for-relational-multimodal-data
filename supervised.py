@@ -50,6 +50,7 @@ config={
 #define a model config dictionary and wandb logging at the same time
 print("Testing: ", args.testing)
 wandb.init(
+    dir=args.wandb_dir,
     mode="disabled" if args.testing else "online",
     project="rel-mm-supervised", #replace this with your wandb project name if you want to use wandb logging
     entity="cse3000",

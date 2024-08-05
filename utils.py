@@ -50,9 +50,10 @@ def create_parser():
     parser.add_argument("--tqdm", action='store_true', help="Use tqdm logging (when running interactively in terminal)")
     parser.add_argument("--data", default=None, type=str, help="Select the AML dataset. Needs to be either small or medium.", required=True)
     parser.add_argument("--model", default=None, type=str, help="Select the model architecture. Needs to be one of [gin, gat, rgcn, pna]", required=True)
-    parser.add_argument("--output_path", default="./outputs", type=str, help="Output path to save the best models", required=False)
+    parser.add_argument("--output_path", default="/mnt/data/outputs/", type=str, help="Output path to save the best models", required=False)
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
+    parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
 
     return parser
 
@@ -123,6 +124,7 @@ class GNN(nn.Module):
         
         n_feats = 2 if config['ego'] else 1
         e_dim = config['num_columns'] * config['n_hidden']
+        #e_dim = config['num_columns']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
