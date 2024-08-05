@@ -95,9 +95,9 @@ class RelHM(torch_frame.data.Dataset):
             col_to_stype = {
                 't_dat': torch_frame.timestamp,                # Timestamp
                 'price': torch_frame.numerical,                # Numerical
-                'club_member_status': torch_frame.categorical, # Categorical
-                'fashion_news_frequency': torch_frame.categorical, # Categorical
-                'age': torch_frame.numerical,                  # Numerical
+                #'club_member_status': torch_frame.categorical, # Categorical
+                #'fashion_news_frequency': torch_frame.categorical, # Categorical
+                #'age': torch_frame.numerical,                  # Numerical
                 'postal_code': torch_frame.categorical,        # Categorical
                 'prod_name': torch_frame.categorical,          # Categorical
                 'product_type_name': torch_frame.categorical,  # Categorical
@@ -130,7 +130,7 @@ class RelHM(torch_frame.data.Dataset):
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
-                self.num_columns = ['price', 'age']
+                self.num_columns = ['price']
                 self.cat_columns = ['product_type_name',  'prod_name', 'perceived_colour_value_name']
                 self.maskable_columns = self.num_columns + self.cat_columns
                 mask_col = create_mask(self, self.maskable_columns)
