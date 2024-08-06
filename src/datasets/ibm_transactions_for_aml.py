@@ -98,12 +98,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 'Amount Paid': torch_frame.numerical,
                 #'Amount Received': torch_frame.numerical
             }
-            # #num_columns = ['Amount Received', 'Amount Paid']
-            # #self.num_columns = ['Amount Received']
-            # self.num_columns = ['Amount Paid']
-            # #self.cat_columns = ['Receiving Currency', 'Payment Format']
-            # self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
-            # self.maskable_columns = self.num_columns + self.cat_columns
+            self.num_columns = ['Amount Paid']
+            self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
@@ -122,8 +118,6 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
-                self.num_columns = ['Amount Paid']
-                self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
                 self.maskable_columns = self.num_columns + self.cat_columns
                 mask_col = create_mask(self, self.maskable_columns)
                 self.df['maskable_column'] = mask_col

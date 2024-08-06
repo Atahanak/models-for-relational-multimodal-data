@@ -99,11 +99,8 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
                 # 'receipt_status': torch_frame.categorical,
                 'block_timestamp': torch_frame.timestamp,
             }
-            # num_columns = ['nonce', 'value', 'gas', 'gas_price']
-            # #cat_columns = ['receipt_status']
-            # #cat_columns = ['transaction_index']
-            # cat_columns = []
-
+            self.num_columns = ['nonce', 'value', 'gas', 'gas_price']
+            self.cat_columns = []
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
             
             logger.info(f'Creating graph...')
@@ -120,8 +117,6 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
-                self.num_columns = ['nonce', 'value', 'gas', 'gas_price']
-                self.cat_columns = []
                 self.maskable_columns = self.num_columns + self.cat_columns
                 mask_col = create_mask(self, self.maskable_columns)
                 self.df['maskable_column'] = mask_col

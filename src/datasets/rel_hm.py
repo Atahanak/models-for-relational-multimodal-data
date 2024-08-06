@@ -99,7 +99,7 @@ class RelHM(torch_frame.data.Dataset):
                 #'fashion_news_frequency': torch_frame.categorical, # Categorical
                 #'age': torch_frame.numerical,                  # Numerical
                 'postal_code': torch_frame.categorical,        # Categorical
-                'prod_name': torch_frame.categorical,          # Categorical
+                #'prod_name': torch_frame.categorical,          # Categorical
                 'product_type_name': torch_frame.categorical,  # Categorical
                 'product_group_name': torch_frame.categorical, # Categorical
                 'graphical_appearance_name': torch_frame.categorical, # Categorical
@@ -112,6 +112,8 @@ class RelHM(torch_frame.data.Dataset):
                 'section_name': torch_frame.categorical,       # Categorical
                 'garment_group_name': torch_frame.categorical, # Categorical
             }
+            self.num_columns = ['price']
+            self.cat_columns = ['product_type_name',  'department_name', 'perceived_colour_value_name']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
@@ -130,8 +132,6 @@ class RelHM(torch_frame.data.Dataset):
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
 
             if PretrainType.MASK in pretrain:
-                self.num_columns = ['price']
-                self.cat_columns = ['product_type_name',  'prod_name', 'perceived_colour_value_name']
                 self.maskable_columns = self.num_columns + self.cat_columns
                 mask_col = create_mask(self, self.maskable_columns)
                 self.df['maskable_column'] = mask_col
