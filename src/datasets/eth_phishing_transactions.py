@@ -2,7 +2,7 @@ import os.path
 
 import torch
 import torch_frame
-from torch_geometric.sampler import EdgeSamplerInput
+from torch_geometric.sampler import EdgeSamplerInput, NodeSamplerInput
 from torch_frame import stype
 from torch_frame.nn import (
     EmbeddingEncoder,
@@ -62,32 +62,34 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             self.pretrain = pretrain
             self.mask_type = mask_type
 
-            names = [
-                'nonce',
-                'from_address',
-                'to_address',
-                #'transaction_index',
-                'value',
-                'gas',
-                'gas_price',
-                # 'receipt_status',
-                'block_timestamp',
-                # 'phishing',
-            ]
-            dtypes = {
-                'nonce': 'float64',
-                'from_address': 'float64',
-                'to_address': 'float64',
-                #'transaction_index': 'category',
-                'value': 'float64',
-                'gas': 'float64',
-                'gas_price': 'float64',
-                # 'receipt_status': 'category',
-                'block_timestamp': 'float64',
-                # 'phishing': 'category',
-            }
+            # names = [
+            #     'nonce',
+            #     'from_address',
+            #     'to_address',
+            #     #'transaction_index',
+            #     'value',
+            #     'gas',
+            #     'gas_price',
+            #     # 'receipt_status',
+            #     'block_timestamp',
+            #     # 'phishing',
+            # ]
+            # dtypes = {
+            #     'nonce': 'float64',
+            #     'from_address': 'float64',
+            #     'to_address': 'float64',
+            #     #'transaction_index': 'category',
+            #     'value': 'float64',
+            #     'gas': 'float64',
+            #     'gas_price': 'float64',
+            #     # 'receipt_status': 'category',
+            #     'block_timestamp': 'float64',
+            #     # 'phishing': 'category',
+            # }
 
-            self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
+            #self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)
+            self.df = pd.read_csv(root, header=0)
+            print(self.df.describe())
             self.df.reset_index(inplace=True)
             
             col_to_stype = {
@@ -126,7 +128,11 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             else:
                 self.maskable_columns = None
 
-            col_to_stype = set_target_col(self, pretrain, col_to_stype, "phishing")
+            if PretrainType.MASK in pretrain or PretrainType.LINK_PRED in pretrain:
+                col_to_stype = set_target_col(self, pretrain, col_to_stype, None)
+            else:
+                self.target_col = None
+                del col_to_stype['link']
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
 
         def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
@@ -181,6 +187,51 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
                 idx = torch.cat([idx, new_edges])
 
             return row, col, idx
+
+        def sample_neighbors_from_nodes(self, nodes, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
+            """k-hop sampling.
+            
+            If k-hop sampling, this method **guarantees** that the first 
+            ``n_seed_edges`` edges in the resulting table are the seed edges in the
+            same order as given by ``idx``.
+
+            Does not support multi-graphs
+
+            Parameters
+            ----------
+            idx : int | list[int] | array
+                Edge indices to use as seed for k-hop sampling.
+            num_neighbors: int | list[int] | array
+                Number of neighbors to sample for each seed edge.
+            Returns
+            -------
+            pd.DataFrame
+                Sampled edge data
+
+                data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
+                sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+            """
+            nodes = torch.tensor(nodes, dtype=torch.long)
+            input = NodeSamplerInput(None, torch.tensor(nodes, dtype=torch.long))
+            
+            if mode == 'train':
+                out = self.train_sampler.sample_from_nodes(input)
+                perm = self.train_sampler.edge_permutation 
+            elif mode == 'val':
+                out = self.val_sampler.sample_from_nodes(input)
+                perm = self.val_sampler.edge_permutation 
+            elif mode =='test':
+                out = self.test_sampler.sample_from_nodes(input)
+                perm = self.test_sampler.edge_permutation 
+            else:
+                raise ValueError("Invalid sampling mode! Valid values: ['train', 'val', 'test']")
+
+            e_id = perm[out.edge] if perm is not None else out.edge
+            row = self.edges[e_id, 0]
+            col = self.edges[e_id, 1]
+            idx = e_id
+
+            return row, col, idx
         
         def get_encoder(self, channels):
             stype_encoder_dict = {
@@ -195,3 +246,19 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
                         stype_encoder_dict=stype_encoder_dict,
             )
             return encoder
+
+
+class EthereumPhishingNodes(torch_frame.data.Dataset):
+     def __init__(self, root):
+            self.root = root
+            self.target_col = 'label'
+            self.df = pd.read_csv(root)
+            print(self.df.head())
+            self.timestamp_col = 'first_transaction'
+            self.df = apply_split(self.df, 'temporal', [0.65, 0.15, 0.2], self.timestamp_col)
+            self.df.reset_index(inplace=True)
+            col_to_stype = {
+                'node': stype.numerical,
+                'label': stype.categorical,
+            }
+            super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)

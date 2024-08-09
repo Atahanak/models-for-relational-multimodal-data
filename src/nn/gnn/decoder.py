@@ -16,6 +16,17 @@ class ClassifierHead(nn.Module):
 
         return self.mlp(x)
 
+class NodeClassificationHead(nn.Module):
+    def __init__(self, n_classes=1, n_hidden=128, dropout=0.5):
+        super().__init__()
+        self.n_hidden = n_hidden
+        
+        self.mlp = nn.Sequential(Linear(n_hidden, 50), nn.ReLU(), nn.Dropout(dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(dropout),
+                              Linear(25, n_classes))
+    
+    def forward(self, x):
+        return self.mlp(x)
+
 
 class LinkPredHead(torch.nn.Module):
     """Readout head for link prediction.

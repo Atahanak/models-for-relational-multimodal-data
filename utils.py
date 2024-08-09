@@ -13,10 +13,10 @@ import torch.nn as nn
 from sklearn.metrics import f1_score
 
 from src.nn.gnn.model import GINe, PNAS
-from src.nn.gnn.decoder import ClassifierHead
+from src.nn.gnn.decoder import ClassifierHead, NodeClassificationHead
 from src.nn.models import TABGNN
 from src.nn.models import TABGNNFused
-from src.utils.batch_processing import graph_inputs, addEgoIDs
+from src.utils.batch_processing import graph_inputs, node_inputs
 
 def logger_setup():
     # Setup logging
@@ -42,7 +42,7 @@ def create_parser():
     parser.add_argument("--ports", action='store_true', help="Use ports in GNN training")
     parser.add_argument("--batch_size", default=200, type=int, help="Select the batch size for GNN training")
     parser.add_argument("--n_epochs", default=100, type=int, help="Select the number of epochs for GNN training")
-    parser.add_argument('--num_neighs', nargs='+', default=[100,100], help='Pass the number of neighors to be sampled in each hop (descending).')
+    parser.add_argument('--num_neighs', nargs='+', type=int, default=[100,100], help='Pass the number of neighors to be sampled in each hop (descending).')
     
 
     #Misc
@@ -68,6 +68,26 @@ def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
         #select the seed edges from which the batch was created
         batch_size = len(batch.y)
         node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode=mode, args=args)
+        
+        # # convert tensorframe to tensor
+        # feats = []
+        # from datetime import datetime
+        # for stype in edge_attr.stypes:
+        #     feat = edge_attr.feat_dict[stype]
+        #     if feat.dim() == 3:
+        #         years_in_seconds = (feat[:, :, 0]) * 365 * 24 * 3600
+        #         months_in_seconds = (feat[:, :, 1]) * 30 * 24 * 3600
+        #         days_in_seconds = (feat[:, :, 2]) * 24 * 3600
+        #         hours_in_seconds = feat[:, :, 3] * 3600
+        #         minutes_in_seconds = feat[:, :, 4] * 60
+        #         seconds = feat[:, :, 5]
+
+        #         # Sum all components to get the UNIX timestamp
+        #         feat = years_in_seconds + months_in_seconds + days_in_seconds + hours_in_seconds + minutes_in_seconds + seconds
+        #     elif feat.dim() == 1:
+        #         feat = feat.unsqueeze(1)
+        #     feats.append(feat)
+        # edge_attr = torch.cat(feats, dim=1)
 
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
@@ -112,19 +132,25 @@ class GNN(nn.Module):
                     stype_encoder_dict=stype_encoder_dict,
         )
         self.graph_model = self.get_graph_model(config)
-        self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
-    
+        if config['task'] == 'edge_classification':
+            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'node_classification':
+            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+
     def forward(self, x, edge_index, edge_attr):
-        edge_attr, _ = self.encoder(edge_attr)  
+        #edge_attr, _ = self.encoder(edge_attr)  
         x, edge_attr = self.graph_model(x, edge_index, edge_attr)
-        out = self.classifier(x, edge_index, edge_attr)
+        if self.config['task'] == 'edge_classification':
+            out = self.classifier(x, edge_index, edge_attr)
+        elif self.config['task'] == 'node_classification':
+            out = self.classifier(x)
         return out
 
     def get_graph_model(self, config):
         
         n_feats = 2 if config['ego'] else 1
-        e_dim = config['num_columns'] * config['n_hidden']
-        #e_dim = config['num_columns']
+        #e_dim = config['num_columns'] * config['n_hidden']
+        e_dim = config['num_columns']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 

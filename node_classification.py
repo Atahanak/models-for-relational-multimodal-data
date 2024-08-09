@@ -12,9 +12,34 @@ from torch_frame.nn import (
 import torch
 from torch_geometric.utils import degree
 
-from src.datasets import IBMTransactionsAML
+from src.datasets import EthereumPhishingTransactions, EthereumPhishingNodes
 from sklearn.metrics import f1_score
 from utils import *
+
+@torch.no_grad()
+def evaluaten(loader, dataset, tensor_frame, model, device, args, mode):
+    model.eval()
+
+    '''Evaluates the model performance '''
+    preds = []
+    ground_truths = []
+    for batch in tqdm(loader, disable=not args.tqdm):
+        #select the seed edges from which the batch was created
+        batch_size = len(batch.y)
+        node_feats, edge_index, edge_attr, y = node_inputs(dataset, batch, tensor_frame, mode=mode, args=args)
+
+        node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
+        with torch.no_grad():
+            pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+            preds.append(pred.argmax(dim=-1))
+            ground_truths.append(y)
+
+    pred = torch.cat(preds, dim=0).cpu().numpy()
+    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
+    f1 = f1_score(ground_truth, pred)
+
+    model.train()
+    return f1
 
 # workaround for CUDA invalid configuration bug
 torch.backends.cuda.enable_mem_efficient_sdp(False)
@@ -37,6 +62,7 @@ config={
     "reverse_mp": args.reverse_mp,
     "ego": args.ego,
     "ports": args.ports,
+    #"lr": 0.0004,
     "lr": 5e-4,
     "n_hidden": 64,
     "n_gnn_layers": 2,
@@ -44,8 +70,10 @@ config={
     "loss": "ce",
     "w_ce1": 1.,
     "w_ce2": 6.,
+    #"w_ce2": 40.97,
+    #"dropout": 0.05,
     "dropout": 0.10527690625126304,
-    "task": "edge_classification"
+    "task": "node_classification"
 }
 
 #define a model config dictionary and wandb logging at the same time
@@ -62,29 +90,33 @@ create_experiment_path(config) # type: ignore
 # Create a logger
 logger_setup()
 
-dataset = IBMTransactionsAML(
+edges = EthereumPhishingTransactions(
     root=config['data'],
     split_type='temporal_daily', 
     splits=[0.6, 0.2, 0.2], 
     khop_neighbors=args.num_neighs,
     ports=args.ports
 )
-dataset.materialize()
+edges.materialize()
 
-train_dataset, val_dataset, test_dataset = dataset.split()
+nodes_path = '/mnt/data/ethereum-phishing-transaction-network/nodes.csv'
+nodes = EthereumPhishingNodes(root=nodes_path)
+nodes.materialize()
+
+train_dataset, val_dataset, test_dataset = nodes.split()
 
 if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnnfused':
-    edge_index = dataset.train_graph.edge_index
-    num_nodes = dataset.train_graph.num_nodes
+    edge_index = edges.train_graph.edge_index
+    num_nodes = edges.train_graph.num_nodes
     config["in_degrees"] = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
 
-tensor_frame = dataset.tensor_frame 
+tensor_frame = nodes.tensor_frame 
 train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
 val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 
-num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
+num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical])
+num_categorical = len(edges.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in edges.tensor_frame.col_names_dict else 0
 
 num_columns = num_numerical + num_categorical + 1
 config['num_columns'] = num_columns
@@ -101,22 +133,22 @@ stype_encoder_dict = {
 
 if config['model'] == 'pna' or config['model'] == 'gin':
     model = GNN(
-                dataset.col_stats, 
-                dataset.tensor_frame.col_names_dict, 
+                edges.col_stats, 
+                edges.tensor_frame.col_names_dict, 
                 stype_encoder_dict, 
                 config
             ).to(device)
 elif config['model'] == 'tabgnn':
     model = TABGNNS(
-                dataset.col_stats, 
-                dataset.tensor_frame.col_names_dict, 
+                edges.col_stats, 
+                edges.tensor_frame.col_names_dict, 
                 stype_encoder_dict, 
                 config
             ).to(device)
 elif config['model'] == 'tabgnnfused':
     model = TABGNNFusedS(
-                dataset.col_stats, 
-                dataset.tensor_frame.col_names_dict, 
+                edges.col_stats, 
+                edges.tensor_frame.col_names_dict, 
                 stype_encoder_dict, 
                 config
             ).to(device)
@@ -137,41 +169,7 @@ for epoch in range(config['epochs']):
         optimizer.zero_grad()
         batch_size = len(batch.y)
 
-        node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode='train', args=args)
-        # # convert tensorframe to tensor
-        # feats = []
-        # from datetime import datetime
-        # for stype in edge_attr.stypes:
-        #     # print(stype)
-        #     feat = edge_attr.feat_dict[stype]
-        #     # if feat dim is 3 convert to 2 by converting it to a timestamp
-        #     #import sys
-        #     if feat.dim() == 3:
-        #         # feat = torch.tensor([
-        #         #     int(datetime(year=arr[0][0], month=1, day=1, hour=arr[0][3], minute=arr[0][4], second=arr[0][5]).timestamp())
-        #         #     for arr in feat
-        #         # ]).t().unsqueeze(1)
-        #         # # Calculate the UNIX timestamp
-        #         # We assume there are 365 days per year and 30 days per month as an approximation
-        #         years_in_seconds = (feat[:, :, 0]) * 365 * 24 * 3600
-        #         months_in_seconds = (feat[:, :, 1]) * 30 * 24 * 3600
-        #         days_in_seconds = (feat[:, :, 2]) * 24 * 3600
-        #         hours_in_seconds = feat[:, :, 3] * 3600
-        #         minutes_in_seconds = feat[:, :, 4] * 60
-        #         seconds = feat[:, :, 5]
-
-        #         # Sum all components to get the UNIX timestamp
-        #         feat = years_in_seconds + months_in_seconds + days_in_seconds + hours_in_seconds + minutes_in_seconds + seconds
-        #         #normalize using col_stats
-        #     elif feat.dim() == 1:
-        #         feat = feat.unsqueeze(1)
-        #         #print(feat[:10])
-        #         #sys.exit()
-        #     # print(feat[:10])
-        #     # print(type(feat))
-        #     feats.append(feat)
-        # edge_attr = torch.cat(feats, dim=1)
-
+        node_feats, edge_index, edge_attr, y = node_inputs(edges, batch, edges.tensor_frame, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
 
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
@@ -195,8 +193,8 @@ for epoch in range(config['epochs']):
     logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
 
     # evaluate
-    val_f1 = evaluate(val_loader, dataset, tensor_frame, model, device, args, 'val')
-    te_f1 = evaluate(test_loader, dataset, tensor_frame, model, device, args, 'test')
+    val_f1 = evaluaten(val_loader, edges, edges.tensor_frame, model, device, args, 'val')
+    te_f1 = evaluaten(test_loader, edges, edges.tensor_frame, model, device, args, 'test')
 
     wandb.log({"f1/validation": val_f1}, step=epoch)
     wandb.log({"f1/test": te_f1}, step=epoch)

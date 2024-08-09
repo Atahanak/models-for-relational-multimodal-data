@@ -6,6 +6,32 @@ from torch_frame import stype
 
 from src.primitives import negative_sampling
 
+def node_inputs(dataset, batch: TensorFrame, tensor_frame: TensorFrame, mode='train', args=None):
+
+    ids = batch.get_col_feat("node")
+    y = batch.y
+    khop_source, khop_destination, idx = dataset.sample_neighbors_from_nodes(ids, 'test')
+    edge_attr = tensor_frame.__getitem__(idx)
+
+    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+    # make sure ids are at the start of nodes
+    #nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]])
+    #RuntimeError: Tensors must have same number of dimensions: got 2 and 1
+    nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)].unsqueeze(1)])
+
+    num_nodes = nodes.shape[0]
+    node_feats = torch.ones(num_nodes).view(-1,num_nodes).t()
+
+    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+
+    if args.ego:
+        batch_size = len(batch.y)
+        node_feats = addEgoIDs(node_feats, edge_index[:, :batch_size])
+
+    return node_feats, edge_index, edge_attr, y
 
 def graph_inputs(dataset, batch: TensorFrame, tensor_frame: TensorFrame, mode='train', args=None):
 
