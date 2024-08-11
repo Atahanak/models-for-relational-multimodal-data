@@ -12,12 +12,12 @@ from torch_frame.nn import (
 import torch
 from torch_geometric.utils import degree
 
-from src.datasets import EthereumPhishingTransactions, EthereumPhishingNodes
+from src.datasets import EthereumPhishing, EllipticBitcoin
 from sklearn.metrics import f1_score
 from utils import *
 
 @torch.no_grad()
-def evaluaten(loader, dataset, tensor_frame, model, device, args, mode):
+def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
     model.eval()
 
     '''Evaluates the model performance '''
@@ -26,7 +26,7 @@ def evaluaten(loader, dataset, tensor_frame, model, device, args, mode):
     for batch in tqdm(loader, disable=not args.tqdm):
         #select the seed edges from which the batch was created
         batch_size = len(batch.y)
-        node_feats, edge_index, edge_attr, y = node_inputs(dataset, batch, tensor_frame, mode=mode, args=args)
+        node_feats, edge_index, edge_attr, y = dataset.get_graph_inputs(batch, mode=mode, args=args)
 
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
@@ -63,16 +63,18 @@ config={
     "ego": args.ego,
     "ports": args.ports,
     #"lr": 0.0004,
-    "lr": 5e-4,
-    "n_hidden": 64,
+    #"lr": 5e-4,
+    "lr": 0.0006116418195373612,
+    "n_hidden": 20,
     "n_gnn_layers": 2,
     "n_classes" : 2,
     "loss": "ce",
     "w_ce1": 1.,
-    "w_ce2": 6.,
+    #"w_ce2": 6.,
+    "w_ce2": 9.23,
     #"w_ce2": 40.97,
-    #"dropout": 0.05,
-    "dropout": 0.10527690625126304,
+    "dropout": 0.083,
+    #"dropout": 0.10527690625126304,
     "task": "node_classification"
 }
 
@@ -90,18 +92,25 @@ create_experiment_path(config) # type: ignore
 # Create a logger
 logger_setup()
 
-edges = EthereumPhishingTransactions(
-    root=config['data'],
-    split_type='temporal_daily', 
-    splits=[0.6, 0.2, 0.2], 
-    khop_neighbors=args.num_neighs,
-    ports=args.ports
-)
-edges.materialize()
-
-nodes_path = '/mnt/data/ethereum-phishing-transaction-network/nodes.csv'
-nodes = EthereumPhishingNodes(root=nodes_path)
-nodes.materialize()
+if 'ethereum-phishing-transaction-network' in config['data']:
+    dataset = EthereumPhishing(
+        root=config['data'],
+        split_type='temporal_daily', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        channels=config['n_hidden']
+    )
+elif 'elliptic_bitcoin_dataset' in config['data']:
+    dataset = EllipticBitcoin(
+        root=config['data'],
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        channels=config['n_hidden']
+    )
+else:
+    raise ValueError("Invalid data name!")
+nodes = dataset.nodes
+edges = dataset.edges
 
 train_dataset, val_dataset, test_dataset = nodes.split()
 
@@ -124,12 +133,11 @@ logging.info(f"num_numerical: {num_numerical}")
 logging.info(f"num_categorical: {num_categorical}")
 logging.info(f"num_columns: {num_columns}")
 
-
 stype_encoder_dict = {
-        stype.categorical: EmbeddingEncoder(),
-        stype.numerical: LinearEncoder(),
-        stype.timestamp: TimestampEncoder(),
-    }
+    stype.categorical: EmbeddingEncoder(),
+    stype.numerical: LinearEncoder(),
+    stype.timestamp: TimestampEncoder(),
+}
 
 if config['model'] == 'pna' or config['model'] == 'gin':
     model = GNN(
@@ -169,7 +177,7 @@ for epoch in range(config['epochs']):
         optimizer.zero_grad()
         batch_size = len(batch.y)
 
-        node_feats, edge_index, edge_attr, y = node_inputs(edges, batch, edges.tensor_frame, mode='train', args=args)
+        node_feats, edge_index, edge_attr, y = dataset.get_graph_inputs(batch, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
 
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
@@ -193,8 +201,8 @@ for epoch in range(config['epochs']):
     logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
 
     # evaluate
-    val_f1 = evaluaten(val_loader, edges, edges.tensor_frame, model, device, args, 'val')
-    te_f1 = evaluaten(test_loader, edges, edges.tensor_frame, model, device, args, 'test')
+    val_f1 = evaluate(val_loader, dataset, edges.tensor_frame, model, device, args, 'val')
+    te_f1 = evaluate(test_loader, dataset, edges.tensor_frame, model, device, args, 'test')
 
     wandb.log({"f1/validation": val_f1}, step=epoch)
     wandb.log({"f1/test": te_f1}, step=epoch)
@@ -206,8 +214,8 @@ for epoch in range(config['epochs']):
     elif val_f1 > best_val_f1:
         best_val_f1 = val_f1
         wandb.log({"best_test_f1": te_f1}, step=epoch)
-        if args.save_model:
-            save_model(model, optimizer, epoch, config)
+        # if args.save_model:
+        #     save_model(model, optimizer, epoch, config)
 
 
 

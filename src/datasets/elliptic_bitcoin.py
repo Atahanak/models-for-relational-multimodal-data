@@ -12,7 +12,6 @@ from torch_frame.nn import (
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
-import numpy as np
 
 from .util.mask import PretrainType, set_target_col, create_mask
 from .util.graph import create_graph, add_ports, add_EgoIDs
@@ -32,8 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class EthereumPhishing():
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.65, 0.15, 0.2], khop_neighbors=[100, 100], ports=False, channels=64):
+class EllipticBitcoin():
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False, channels=64):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -42,12 +41,12 @@ class EthereumPhishing():
             self.mask_type = mask_type
 
             logger.info(f'Creating edges...')
-            self.edges = EthereumPhishingTransactions(os.path.join(root, 'edges.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, khop_neighbors=khop_neighbors, ports=ports)
+            self.edges = EllipticBitcoinTransactions(os.path.join(root, 'elliptic_txs_edgelist_mapped.csv'), ports=ports)
             self.edges.materialize()
             self.edges.init_encoder(channels)
             logger.info(f'Edges created.')
             logger.info(f'Creating nodes...')
-            self.nodes = EthereumPhishingNodes(os.path.join(root, 'nodes.csv'), split_type=split_type, splits=splits)
+            self.nodes = EllipticBitcoinNodes(os.path.join(root, 'elliptic_txs_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, khop_neighbors=khop_neighbors)
             self.nodes.materialize()
             self.nodes.init_encoder(channels)
             logger.info(f'Nodes created.')
@@ -132,12 +131,8 @@ class EthereumPhishing():
                 data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
                 sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
-            nodes = nodes.type(torch.long)
-            # print(nodes)
-            # neighbors = self.edges.train_graph.edge_index[1][self.edges.train_graph.edge_index[0] == nodes[0]]
-            # print(f"Neighbors of node {nodes[0]}: {neighbors.tolist()}")
-
-            input = NodeSamplerInput(None, nodes)
+            nodes = torch.tensor(nodes, dtype=torch.long)
+            input = NodeSamplerInput(None, torch.tensor(nodes, dtype=torch.long))
             
             if mode == 'train':
                 out = self.edges.train_sampler.sample_from_nodes(input)
@@ -150,30 +145,26 @@ class EthereumPhishing():
                 perm = self.edges.test_sampler.edge_permutation 
             else:
                 raise ValueError("Invalid sampling mode! Valid values: ['train', 'val', 'test']")
-            # print(out)
-            # print(out.edge)
 
             e_id = perm[out.edge] if perm is not None else out.edge
-            row = self.edges.edges[e_id, 0]
-            col = self.edges.edges[e_id, 1]
+            row = self.edges[e_id, 0]
+            col = self.edges[e_id, 1]
             idx = e_id
 
             return row, col, idx
     
         def get_graph_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
 
-            ids = batch.get_col_feat("node")
+            ids = batch.get_col_feat("txId")
             y = batch.y
             khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
             edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            edge_attr, _ = self.edges.encoder(edge_attr)
+            edge_attr = self.edges.encoder(edge_attr)
 
             nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-            nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)].unsqueeze(1)]).type(torch.long)
-
-            # node_attr = self.tensor_frame.__getitem__(nodes)
-            # node_attr = self.nodes.encoder(node_attr)
-            node_attr = torch.ones(len(nodes)).view(-1, len(nodes)).t()
+            nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)].unsqueeze(1)])
+            node_attr = self.tensor_frame.__getitem__(nodes)
+            node_attr = self.nodes.encoder(node_attr)
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
@@ -183,47 +174,66 @@ class EthereumPhishing():
             if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
-            #print(node_attr.shape, edge_index.shape, edge_attr.shape, y.shape)
 
             return node_attr, edge_index, edge_attr, y
 
-class EthereumPhishingTransactions(torch_frame.data.Dataset):
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
+class EllipticBitcoinTransactions(torch_frame.data.Dataset):
+        def __init__(self, root, khop_neighbors=[100,100], ports=False):
             self.root = root
-            self.split_type = split_type
-            self.splits = splits
             self.khop_neighbors = khop_neighbors
-            self.timestamp_col = 'block_timestamp'
-            self.pretrain = pretrain
-            self.mask_type = mask_type
-            
+            self.ports = ports
             self.df = pd.read_csv(root, header=0)
-            print(self.df.describe())
-            self.df.reset_index(inplace=True)
-            
+            self.df['edge_attr'] = 1 # dummy edge attribute
+
             col_to_stype = {
-                'nonce': torch_frame.numerical,
-                'value': torch_frame.numerical,
-                'gas': torch_frame.numerical,
-                'gas_price': torch_frame.numerical,
-                'block_timestamp': torch_frame.timestamp,
+                'edge_attr': stype.numerical
             }
-            self.num_columns = ['nonce', 'value', 'gas', 'gas_price']
-            self.cat_columns = []
-            #self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
             
             logger.info(f'Creating graph...')
             start = time.time()
-            col_to_stype = create_graph(self, col_to_stype, "from_address", "to_address")
+            col_to_stype = create_graph(self, col_to_stype, "txId1", "txId2")
             logger.info(f'Graph created in {time.time()-start} seconds.')
 
-            if ports:
+            if self.ports:
                 logger.info(f'Adding ports...')
                 start = time.time()
                 add_ports(self)
                 col_to_stype['in_port'] = stype.numerical
                 col_to_stype['out_port'] = stype.numerical
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
+            super().__init__(self.df, col_to_stype)
+        
+        def init_encoder(self, channels):
+            self.encoder = StypeWiseFeatureEncoder(
+                channels,
+                self.col_stats,
+                self.tensor_frame.col_names_dict,
+                {stype.numerical: LinearEncoder()}
+            )
+
+class EllipticBitcoinNodes(torch_frame.data.Dataset):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
+            self.root = root
+            self.split_type = split_type
+            self.splits = splits
+            self.khop_neighbors = khop_neighbors
+            self.pretrain = pretrain
+            self.mask_type = mask_type
+
+            self.df = pd.read_csv(root, header=0)
+            # convert class unkown to 0
+            self.df['class'] = self.df['class'].apply(lambda x: 0 if x == 'unknown' else x)
+            print(self.df.describe())
+            self.df.reset_index(inplace=True)
+            
+            col_to_stype = {}
+            for col in self.df.columns:
+                if col != 'txId' and col != 'class':
+                    col_to_stype[col] = torch_frame.numerical
+
+            self.num_columns = [col for col in self.df.columns]
+            self.cat_columns = []
+            self.df = apply_split(self.df, self.split_type, self.splits, None)
 
             if PretrainType.MASK in pretrain:
                 self.maskable_columns = self.num_columns + self.cat_columns
@@ -238,38 +248,14 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             if PretrainType.MASK in pretrain or PretrainType.LINK_PRED in pretrain:
                 col_to_stype = set_target_col(self, pretrain, col_to_stype, None)
             else:
-                self.target_col = None
-                del col_to_stype['link']
-            #super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
-            super().__init__(self.df, col_to_stype, target_col=self.target_col, maskable_columns= self.maskable_columns)
+                col_to_stype = set_target_col(self, pretrain, col_to_stype, "class")
+            #print(self.target_col)
+            super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
 
         def init_encoder(self, channels):
             self.encoder = StypeWiseFeatureEncoder(
                 channels,
                 self.col_stats,
                 self.tensor_frame.col_names_dict,
-                {stype.numerical: LinearEncoder(), stype.timestamp: TimestampEncoder()}
+                {stype.numerical: LinearEncoder()}
             )
-
-class EthereumPhishingNodes(torch_frame.data.Dataset):
-    def __init__(self, root, split_type='temporal', splits=[0.65, 0.15, 0.2]):
-        self.root = root
-        self.target_col = 'label'
-        self.df = pd.read_csv(root)
-        print(self.df.head())
-        self.timestamp_col = 'first_transaction'
-        self.df = apply_split(self.df, split_type, splits, self.timestamp_col)
-        self.df.reset_index(inplace=True)
-        col_to_stype = {
-            'node': stype.numerical,
-            'label': stype.categorical,
-        }
-        super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
-    
-    def init_encoder(self, channels):
-        self.encoder = StypeWiseFeatureEncoder(
-            channels,
-            self.col_stats,
-            self.tensor_frame.col_names_dict,
-            {stype.numerical: LinearEncoder()}
-        )

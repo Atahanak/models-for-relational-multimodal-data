@@ -149,8 +149,10 @@ class GNN(nn.Module):
     def get_graph_model(self, config):
         
         n_feats = 2 if config['ego'] else 1
-        #e_dim = config['num_columns'] * config['n_hidden']
-        e_dim = config['num_columns']
+        n_dim = n_feats
+        #n_dim = n_feats*config['n_hidden'] 
+        e_dim = config['num_columns'] * config['n_hidden']
+        #e_dim = config['num_columns']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
@@ -166,7 +168,7 @@ class GNN(nn.Module):
             in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
             in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
             model = PNAS(
-                num_features=n_feats, 
+                num_features=n_dim,
                 n_hidden=config['n_hidden'], 
                 num_gnn_layers=config['n_gnn_layers'], 
                 edge_dim=e_dim, 
@@ -193,7 +195,7 @@ class TABGNNS(nn.Module):
         self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
     
     def forward(self, x, edge_index, edge_attr):
-        edge_attr, _ = self.encoder(edge_attr)
+        #edge_attr, _ = self.encoder(edge_attr)
         edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
         edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
         x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
@@ -241,7 +243,7 @@ class TABGNNFusedS(nn.Module):
         self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
     
     def forward(self, x, edge_index, edge_attr):
-        edge_attr, _ = self.encoder(edge_attr)
+        #edge_attr, _ = self.encoder(edge_attr)
         edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
         edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
         x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)

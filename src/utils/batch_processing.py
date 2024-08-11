@@ -6,6 +6,28 @@ from torch_frame import stype
 
 from src.primitives import negative_sampling
 
+def node_f_inputs(dataset, batch: TensorFrame, tensor_frame: TensorFrame, mode='train', args=None):
+
+    ids = batch.get_col_feat("node")
+    y = batch.y
+    khop_source, khop_destination, idx = dataset.sample_neighbors_from_nodes(ids, 'test')
+    edge_attr = torch.ones(idx.shape[0], 1)
+
+    nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+    nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)].unsqueeze(1)])
+    node_feats = tensor_frame.__getitem__(nodes)
+
+    n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+    local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+    local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+    edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+
+    if args.ego:
+        batch_size = len(batch.y)
+        node_feats = addEgoIDs(node_feats, edge_index[:, :batch_size])
+
+    return node_feats, edge_index, edge_attr, y
+
 def node_inputs(dataset, batch: TensorFrame, tensor_frame: TensorFrame, mode='train', args=None):
 
     ids = batch.get_col_feat("node")

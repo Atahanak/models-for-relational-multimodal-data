@@ -181,6 +181,7 @@ class PNAS(torch.nn.Module):
         # self.decoder = LinkPredHead(n_classes=n_classes, n_hidden=n_hidden, dropout=final_dropout)
 
     def forward(self, x, edge_index, edge_attr):
+        # x = self.node_emb(x.view(x.shape[0], -1))
         x = self.node_emb(x)
         edge_attr = self.edge_emb(edge_attr.view(edge_attr.shape[0], -1))
 
