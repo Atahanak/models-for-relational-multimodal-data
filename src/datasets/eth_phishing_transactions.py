@@ -33,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class EthereumPhishing():
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.65, 0.15, 0.2], khop_neighbors=[100, 100], ports=False, channels=64):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.65, 0.15, 0.2], khop_neighbors=[100, 100], ports=False, ego=False, channels=64):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -47,7 +47,7 @@ class EthereumPhishing():
             self.edges.init_encoder(channels)
             logger.info(f'Edges created.')
             logger.info(f'Creating nodes...')
-            self.nodes = EthereumPhishingNodes(os.path.join(root, 'nodes.csv'), split_type=split_type, splits=splits)
+            self.nodes = EthereumPhishingNodes(os.path.join(root, 'nodes.csv'), split_type=split_type, splits=splits, ego=ego)
             self.nodes.materialize()
             self.nodes.init_encoder(channels)
             logger.info(f'Nodes created.')
@@ -79,7 +79,7 @@ class EthereumPhishing():
                 data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
                 sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
-            edges = torch.tensor(edges, dtype=torch.int)
+            edges = edges.type(torch.long)
             row = edges[:, 0]
             col = edges[:, 1]
             idx = edges[:, 2] 
@@ -162,18 +162,18 @@ class EthereumPhishing():
     
         def get_graph_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
 
-            ids = batch.get_col_feat("node")
-            y = batch.y
+            #ids = batch.get_col_feat("node")
+            y, ids = batch.y[:, 0], batch.y[:, 1]
             khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
             edge_attr = self.edges.tensor_frame.__getitem__(idx)
             edge_attr, _ = self.edges.encoder(edge_attr)
 
             nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-            nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)].unsqueeze(1)]).type(torch.long)
+            nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]]).type(torch.long)
 
-            # node_attr = self.tensor_frame.__getitem__(nodes)
-            # node_attr = self.nodes.encoder(node_attr)
-            node_attr = torch.ones(len(nodes)).view(-1, len(nodes)).t()
+            node_attr = self.tensor_frame.__getitem__(nodes)
+            node_attr, _ = self.nodes.encoder(node_attr)
+            # node_attr = torch.ones(len(nodes)).view(-1, len(nodes)).t()
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
@@ -185,7 +185,7 @@ class EthereumPhishing():
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
             #print(node_attr.shape, edge_index.shape, edge_attr.shape, y.shape)
 
-            return node_attr, edge_index, edge_attr, y
+            return node_attr, edge_index, edge_attr, y, None
 
 class EthereumPhishingTransactions(torch_frame.data.Dataset):
         def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
@@ -252,17 +252,22 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             )
 
 class EthereumPhishingNodes(torch_frame.data.Dataset):
-    def __init__(self, root, split_type='temporal', splits=[0.65, 0.15, 0.2]):
+    def __init__(self, root, split_type='temporal', splits=[0.65, 0.15, 0.2], ego=False):
         self.root = root
-        self.target_col = 'label'
         self.df = pd.read_csv(root)
+        self.df['target'] = self.df.apply(lambda row: [row['label'], row['node']], axis=1)
+
+        self.df['node_attr'] = 1
+        self.target_col = 'target'
+
         print(self.df.head())
         self.timestamp_col = 'first_transaction'
         self.df = apply_split(self.df, split_type, splits, self.timestamp_col)
+
         self.df.reset_index(inplace=True)
         col_to_stype = {
-            'node': stype.numerical,
-            'label': stype.categorical,
+            'node_attr': stype.numerical,
+            'target': stype.relation,
         }
         super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
     

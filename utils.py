@@ -148,11 +148,11 @@ class GNN(nn.Module):
 
     def get_graph_model(self, config):
         
-        n_feats = 2 if config['ego'] else 1
-        n_dim = n_feats
-        #n_dim = n_feats*config['n_hidden'] 
-        e_dim = config['num_columns'] * config['n_hidden']
-        #e_dim = config['num_columns']
+        n_feats = config['num_node_features']+1 if config['ego'] else config['num_node_features']
+        #n_dim = n_feats
+        n_dim = n_feats*config['n_hidden'] 
+        e_dim = config['num_edge_features'] * config['n_hidden']
+        #e_dim = config['num_edge_features']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
@@ -192,20 +192,30 @@ class TABGNNS(nn.Module):
                     stype_encoder_dict=stype_encoder_dict,
         )
         self.model = self.get_model(config)
-        self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        if config['task'] == 'edge_classification':
+            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'node_classification':
+            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
     
     def forward(self, x, edge_index, edge_attr):
         #edge_attr, _ = self.encoder(edge_attr)
         edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
         edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
         x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
-        out = self.classifier(x, target_edge_index, target_edge_attr)
+        #out = self.classifier(x, target_edge_index, target_edge_attr)
+        if self.config['task'] == 'edge_classification':
+            out = self.classifier(x, target_edge_index, target_edge_attr)
+        elif self.config['task'] == 'node_classification':
+            out = self.classifier(x)
         return out
 
     def get_model(self, config):
         
-        n_feats = 2 if config['ego'] else 1
-        e_dim = config['num_columns'] * config['n_hidden']
+        n_feats = config['num_node_features']+1 if config['ego'] else config['num_node_features']
+        #n_dim = n_feats
+        n_dim = n_feats*config['n_hidden'] 
+        e_dim = config['num_edge_features'] * config['n_hidden']
+        #e_dim = config['num_edge_features']
 
         if config['model'] == "tabgnn":
             if config['in_degrees'] is None:
@@ -215,7 +225,7 @@ class TABGNNS(nn.Module):
             in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
             in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
             model = TABGNN(
-                node_dim=n_feats, 
+                node_dim=n_dim, 
                 encoder=self.encoder,
                 nhidden=config['n_hidden'], 
                 channels=config['n_hidden'], 
@@ -253,7 +263,7 @@ class TABGNNFusedS(nn.Module):
     def get_model(self, config):
         
         n_feats = 2 if config['ego'] else 1
-        e_dim = config['num_columns'] * config['n_hidden']
+        e_dim = config['num_edge_features'] * config['n_hidden']
 
         if config['model'] == "tabgnnfused":
             if config['in_degrees'] is None:

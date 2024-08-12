@@ -53,7 +53,6 @@ class EllipticBitcoin():
             
             self.num_columns = [col for col in self.nodes.df.columns]
             self.cat_columns = []
-            self.tensor_frame = self.nodes.tensor_frame
 
         def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
             """k-hop sampling.
@@ -78,7 +77,7 @@ class EllipticBitcoin():
                 data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
                 sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
-            edges = torch.tensor(edges, dtype=torch.int)
+            edges = edges.type(torch.long)
             row = edges[:, 0]
             col = edges[:, 1]
             idx = edges[:, 2] 
@@ -131,8 +130,8 @@ class EllipticBitcoin():
                 data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
                 sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
-            nodes = torch.tensor(nodes, dtype=torch.long)
-            input = NodeSamplerInput(None, torch.tensor(nodes, dtype=torch.long))
+            nodes = nodes.type(torch.long)
+            input = NodeSamplerInput(None, nodes)
             
             if mode == 'train':
                 out = self.edges.train_sampler.sample_from_nodes(input)
@@ -147,24 +146,24 @@ class EllipticBitcoin():
                 raise ValueError("Invalid sampling mode! Valid values: ['train', 'val', 'test']")
 
             e_id = perm[out.edge] if perm is not None else out.edge
-            row = self.edges[e_id, 0]
-            col = self.edges[e_id, 1]
+            row = self.edges.edges[e_id, 0]
+            col = self.edges.edges[e_id, 1]
             idx = e_id
 
             return row, col, idx
     
         def get_graph_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
 
-            ids = batch.get_col_feat("txId")
-            y = batch.y
+            y, ids = batch.y[:, 0], batch.y[:, 1]
             khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
+
             edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            edge_attr = self.edges.encoder(edge_attr)
+            edge_attr, _ = self.edges.encoder(edge_attr)
 
             nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-            nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)].unsqueeze(1)])
-            node_attr = self.tensor_frame.__getitem__(nodes)
-            node_attr = self.nodes.encoder(node_attr)
+            nodes = torch.cat([ids.squeeze(), nodes[~torch.isin(nodes, ids)]]).type(torch.long)
+            node_attr = self.nodes.tensor_frame.__getitem__(nodes)
+            node_attr, _ = self.nodes.encoder(node_attr)
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
@@ -174,8 +173,9 @@ class EllipticBitcoin():
             if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
-
-            return node_attr, edge_index, edge_attr, y
+            
+            mask = y != 2 # mask out unknown class
+            return node_attr, edge_index, edge_attr, y, mask
 
 class EllipticBitcoinTransactions(torch_frame.data.Dataset):
         def __init__(self, root, khop_neighbors=[100,100], ports=False):
@@ -201,6 +201,8 @@ class EllipticBitcoinTransactions(torch_frame.data.Dataset):
                 col_to_stype['in_port'] = stype.numerical
                 col_to_stype['out_port'] = stype.numerical
                 logger.info(f'Ports added in {time.time()-start:.2f} seconds.')
+
+            del col_to_stype['link']
             super().__init__(self.df, col_to_stype)
         
         def init_encoder(self, channels):
@@ -212,28 +214,31 @@ class EllipticBitcoinTransactions(torch_frame.data.Dataset):
             )
 
 class EllipticBitcoinNodes(torch_frame.data.Dataset):
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
             self.khop_neighbors = khop_neighbors
             self.pretrain = pretrain
             self.mask_type = mask_type
+            self.timestamp_col = '1'
 
             self.df = pd.read_csv(root, header=0)
-            # convert class unkown to 0
-            self.df['class'] = self.df['class'].apply(lambda x: 0 if x == 'unknown' else x)
+            self.df['class'] = self.df['class'].apply(lambda x: 0 if x == '2' else x)
+            self.df['class'] = self.df['class'].apply(lambda x: 2 if x == 'unknown' else x)
+            self.df['class'] = self.df['class'].astype(int)
+
             print(self.df.describe())
             self.df.reset_index(inplace=True)
             
             col_to_stype = {}
             for col in self.df.columns:
-                if col != 'txId' and col != 'class':
+                if col != 'index' and col != 'class' and col != 'txId':
                     col_to_stype[col] = torch_frame.numerical
 
-            self.num_columns = [col for col in self.df.columns]
+            self.num_columns = [col for col in self.df.columns if col != 'index' and col != 'class' and col != 'txId']
             self.cat_columns = []
-            self.df = apply_split(self.df, self.split_type, self.splits, None)
+            self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
 
             if PretrainType.MASK in pretrain:
                 self.maskable_columns = self.num_columns + self.cat_columns
@@ -248,8 +253,9 @@ class EllipticBitcoinNodes(torch_frame.data.Dataset):
             if PretrainType.MASK in pretrain or PretrainType.LINK_PRED in pretrain:
                 col_to_stype = set_target_col(self, pretrain, col_to_stype, None)
             else:
-                col_to_stype = set_target_col(self, pretrain, col_to_stype, "class")
-            #print(self.target_col)
+                self.df['target'] = self.df.apply(lambda row: [row['class'], row['txId']], axis=1)
+                self.target_col = 'target'
+                col_to_stype['target'] = torch_frame.relation
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
 
         def init_encoder(self, channels):

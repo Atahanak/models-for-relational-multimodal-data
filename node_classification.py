@@ -26,11 +26,14 @@ def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
     for batch in tqdm(loader, disable=not args.tqdm):
         #select the seed edges from which the batch was created
         batch_size = len(batch.y)
-        node_feats, edge_index, edge_attr, y = dataset.get_graph_inputs(batch, mode=mode, args=args)
+        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
 
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
             pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+            if mask is not None:
+                pred = pred[mask]
+                y = y[mask]
             preds.append(pred.argmax(dim=-1))
             ground_truths.append(y)
 
@@ -65,7 +68,7 @@ config={
     #"lr": 0.0004,
     #"lr": 5e-4,
     "lr": 0.0006116418195373612,
-    "n_hidden": 20,
+    "n_hidden": 32,
     "n_gnn_layers": 2,
     "n_classes" : 2,
     "loss": "ce",
@@ -124,14 +127,19 @@ train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_s
 val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 
-num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical])
+num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in edges.tensor_frame.col_names_dict else 0
 num_categorical = len(edges.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in edges.tensor_frame.col_names_dict else 0
+num_timestamp = len(edges.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in edges.tensor_frame.col_names_dict else 0
+num_columns = num_numerical + num_categorical + num_timestamp
+config['num_edge_features'] = num_columns
+logging.info(f"Number of edge features: {num_columns}")
 
-num_columns = num_numerical + num_categorical + 1
-config['num_columns'] = num_columns
-logging.info(f"num_numerical: {num_numerical}")
-logging.info(f"num_categorical: {num_categorical}")
-logging.info(f"num_columns: {num_columns}")
+num_numerical = len(nodes.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in nodes.tensor_frame.col_names_dict else 0
+num_categorical = len(nodes.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in nodes.tensor_frame.col_names_dict else 0
+num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in nodes.tensor_frame.col_names_dict else 0
+config['num_node_features'] = num_numerical + num_categorical + num_timestamp
+logging.info(f"Number of node features: {config['num_node_features']}")
+
 
 stype_encoder_dict = {
     stype.categorical: EmbeddingEncoder(),
@@ -177,14 +185,20 @@ for epoch in range(config['epochs']):
         optimizer.zero_grad()
         batch_size = len(batch.y)
 
-        node_feats, edge_index, edge_attr, y = dataset.get_graph_inputs(batch, mode='train', args=args)
+        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
 
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+        
+        if mask is not None:
+            pred = pred[mask]
+            y = y[mask]
+        # print(pred)
+        # print(y)
 
         preds.append(pred.argmax(dim=-1))
         ground_truths.append(y)
-        loss = loss_fn(pred, y.to(torch.long))
+        loss = loss_fn(pred, y.view(-1).to(torch.long))
         
         loss.backward()
         optimizer.step()

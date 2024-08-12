@@ -54,11 +54,12 @@ class TABGNN(Module):
         self.encoder = encoder
         self.channels = channels
         self.nhidden = nhidden
+        self.node_dim = node_dim + channels
         self.edge_dim = edge_dim + channels
 
         self.cls_embedding = Parameter(torch.empty(channels))
         
-        self.node_emb = Linear(node_dim, nhidden)
+        self.node_emb = Linear(self.node_dim, nhidden)
         self.edge_emb = Linear(self.edge_dim, nhidden)
 
         self.tabular_backbone = ModuleList()
@@ -107,26 +108,33 @@ class TABGNN(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
+        V = len(x)
         B = len(target_edge_attr)
         N = len(edge_attr)
-
-        x = self.node_emb(x)
-        x_cls = self.cls_embedding.repeat(B, 1, 1)
-        target_edge_attr = torch.cat([x_cls, target_edge_attr], dim=1)
-        x_cls = self.cls_embedding.repeat(N, 1, 1)
-        edge_attr = torch.cat([x_cls, edge_attr], dim=1)
-
-        for layer in self.tabular_backbone:
-            t_edge_attr = layer(edge_attr)
-            t_target_edge_attr = layer(target_edge_attr)
         
+        x_cls = self.cls_embedding.repeat(V, 1, 1)
+        x = torch.cat([x_cls, x], dim=1)
+        target_edge_attr_x_cls = self.cls_embedding.repeat(B, 1, 1)
+        target_edge_attr = torch.cat([target_edge_attr_x_cls, target_edge_attr], dim=1)
+        edge_attr_cls = self.cls_embedding.repeat(N, 1, 1)
+        edge_attr = torch.cat([edge_attr_cls, edge_attr], dim=1)
+
+        t_x = x
+        t_edge_attr = edge_attr
+        t_target_edge_attr = target_edge_attr
+        for layer in self.tabular_backbone:
+            t_x = layer(t_x)
+            t_edge_attr = layer(t_edge_attr)
+            t_target_edge_attr = layer(t_target_edge_attr)
+        
+        x = (x + t_x) / 2
         edge_attr = (edge_attr + t_edge_attr) / 2
         target_edge_attr = (target_edge_attr + t_target_edge_attr) / 2
         
-
+        x = x.view(-1, self.node_dim)
+        x = self.node_emb(x)
         target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
         target_edge_attr = self.edge_emb(target_edge_attr)
-
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 

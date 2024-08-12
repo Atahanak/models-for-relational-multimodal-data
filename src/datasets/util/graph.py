@@ -98,14 +98,6 @@ def add_ports(self):
         adj_list_in, adj_list_out = to_adj_nodes_with_times(self.test_graph)
         in_ports = ports(self.test_graph.edge_index, adj_list_in)
         out_ports = ports(self.test_graph.edge_index.flipud(), adj_list_out)
-        # print(self.train_graph.edge_attr.shape)
-        # print(in_ports.shape)
-        # self.train_graph.edge_attr = torch.cat([self.train_graph.edge_attr, in_ports[self.train_graph.edge_index[0]]], dim=0)
-        # self.train_graph.edge_attr = torch.cat([self.train_graph.edge_attr, out_ports[self.train_graph.edge_index[1]]], dim=0)
-        # self.val_graph.edge_attr = torch.cat([self.val_graph.edge_attr, in_ports[self.val_graph.edge_index[0]]], dim=0)
-        # self.val_graph.edge_attr = torch.cat([self.val_graph.edge_attr, out_ports[self.val_graph.edge_index[1]]], dim=0)
-        # self.test_graph.edge_attr = torch.cat([self.test_graph.edge_attr, in_ports[self.test_graph.edge_index[0]]], dim=0)
-        # self.test_graph.edge_attr = torch.cat([self.test_graph.edge_attr, out_ports[self.test_graph.edge_index[1]]], dim=0)
         self.df['in_port'] = in_ports
         self.df['out_port'] = out_ports
 
