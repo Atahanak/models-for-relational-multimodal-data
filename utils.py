@@ -13,6 +13,7 @@ import torch.nn as nn
 from sklearn.metrics import f1_score
 
 from src.nn.gnn.model import GINe, PNAS
+from src.nn.models import FTTransformer#, Trompt
 from src.nn.gnn.decoder import ClassifierHead, NodeClassificationHead
 from src.nn.models import TABGNN
 from src.nn.models import TABGNNFused
@@ -58,7 +59,7 @@ def create_parser():
     return parser
 
 @torch.no_grad()
-def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
+def evaluate(loader, dataset, model, device, args, mode, config):
     model.eval()
 
     '''Evaluates the model performance '''
@@ -67,37 +68,23 @@ def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
     for batch in tqdm(loader, disable=not args.tqdm):
         #select the seed edges from which the batch was created
         batch_size = len(batch.y)
-        node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode=mode, args=args)
-        
-        # # convert tensorframe to tensor
-        # feats = []
-        # from datetime import datetime
-        # for stype in edge_attr.stypes:
-        #     feat = edge_attr.feat_dict[stype]
-        #     if feat.dim() == 3:
-        #         years_in_seconds = (feat[:, :, 0]) * 365 * 24 * 3600
-        #         months_in_seconds = (feat[:, :, 1]) * 30 * 24 * 3600
-        #         days_in_seconds = (feat[:, :, 2]) * 24 * 3600
-        #         hours_in_seconds = feat[:, :, 3] * 3600
-        #         minutes_in_seconds = feat[:, :, 4] * 60
-        #         seconds = feat[:, :, 5]
-
-        #         # Sum all components to get the UNIX timestamp
-        #         feat = years_in_seconds + months_in_seconds + days_in_seconds + hours_in_seconds + minutes_in_seconds + seconds
-        #     elif feat.dim() == 1:
-        #         feat = feat.unsqueeze(1)
-        #     feats.append(feat)
-        # edge_attr = torch.cat(feats, dim=1)
+        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
 
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
             pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+            if mask is not None:
+                pred = pred[mask]
+                y = y[mask]
             preds.append(pred.argmax(dim=-1))
             ground_truths.append(y)
 
     pred = torch.cat(preds, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-    f1 = f1_score(ground_truth, pred)
+    if config['n_classes'] == 2:
+        f1 = f1_score(ground_truth, pred)
+    else:
+        f1 = f1_score(ground_truth, pred, average='weighted')
 
     model.train()
     return f1
@@ -121,16 +108,46 @@ def create_experiment_path(config):
     os.makedirs(config['experiment_path'])
     return
 
-class GNN(nn.Module):
-    def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):
+class TT(nn.Module):
+    def __init__(self, config):
         super().__init__()
         self.config = config
-        self.encoder = StypeWiseFeatureEncoder(
-                    out_channels=config['n_hidden'],
-                    col_stats=col_stats,
-                    col_names_dict=col_names_dict,
-                    stype_encoder_dict=stype_encoder_dict,
-        )
+        self.model = self.get_model(config)
+        if config['task'] == 'edge_classification':
+            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'node_classification':
+            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+    
+    def forward(self, x, edge_index, edge_attr):
+        x, x_cls = self.model(x)
+        if self.config['task'] == 'edge_classification':
+            edge_attr, e_cls = self.model(edge_attr)
+            out = self.classifier(x_cls, edge_index, e_cls)
+        elif self.config['task'] == 'node_classification':
+            out = self.classifier(x_cls)
+        return out
+
+    def get_model(self, config):
+        n_feats = config['num_node_features']
+        n_dim = n_feats*config['n_hidden'] 
+        e_dim = config['num_edge_features'] * config['n_hidden']
+
+        if config['model'] == "fttransformer":
+            model = FTTransformer(
+                channels=config["n_hidden"],
+                num_layers=config['n_gnn_layers']
+            )
+        elif config['model'] == "trompt":
+            ValueError("TROMPT model not implemented yet!")
+        else:
+            raise ValueError("Invalid model name!")
+        
+        return model
+
+class GNN(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
         self.graph_model = self.get_graph_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
@@ -138,7 +155,6 @@ class GNN(nn.Module):
             self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
 
     def forward(self, x, edge_index, edge_attr):
-        #edge_attr, _ = self.encoder(edge_attr)  
         x, edge_attr = self.graph_model(x, edge_index, edge_attr)
         if self.config['task'] == 'edge_classification':
             out = self.classifier(x, edge_index, edge_attr)
@@ -148,7 +164,7 @@ class GNN(nn.Module):
 
     def get_graph_model(self, config):
         
-        n_feats = config['num_node_features']+1 if config['ego'] else config['num_node_features']
+        n_feats = config['num_node_features']
         #n_dim = n_feats
         n_dim = n_feats*config['n_hidden'] 
         e_dim = config['num_edge_features'] * config['n_hidden']
@@ -181,16 +197,10 @@ class GNN(nn.Module):
         return model
 
 class TABGNNS(nn.Module):
-    def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
-        self.encoder = StypeWiseFeatureEncoder(
-                    out_channels=config['n_hidden'],
-                    col_stats=col_stats,
-                    col_names_dict=col_names_dict,
-                    stype_encoder_dict=stype_encoder_dict,
-        )
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
@@ -198,7 +208,6 @@ class TABGNNS(nn.Module):
             self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
     
     def forward(self, x, edge_index, edge_attr):
-        #edge_attr, _ = self.encoder(edge_attr)
         edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
         edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
         x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
@@ -211,7 +220,7 @@ class TABGNNS(nn.Module):
 
     def get_model(self, config):
         
-        n_feats = config['num_node_features']+1 if config['ego'] else config['num_node_features']
+        n_feats = config['num_node_features']
         #n_dim = n_feats
         n_dim = n_feats*config['n_hidden'] 
         e_dim = config['num_edge_features'] * config['n_hidden']
@@ -226,7 +235,6 @@ class TABGNNS(nn.Module):
             in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
             model = TABGNN(
                 node_dim=n_dim, 
-                encoder=self.encoder,
                 nhidden=config['n_hidden'], 
                 channels=config['n_hidden'], 
                 num_layers=config['n_gnn_layers'], 
@@ -239,21 +247,15 @@ class TABGNNS(nn.Module):
         return model
 
 class TABGNNFusedS(nn.Module):
-    def __init__(self, col_stats, col_names_dict, stype_encoder_dict, config):
+
+    def __init__(self, config):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
-        self.encoder = StypeWiseFeatureEncoder(
-                    out_channels=config['n_hidden'],
-                    col_stats=col_stats,
-                    col_names_dict=col_names_dict,
-                    stype_encoder_dict=stype_encoder_dict,
-        )
         self.model = self.get_model(config)
         self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
     
     def forward(self, x, edge_index, edge_attr):
-        #edge_attr, _ = self.encoder(edge_attr)
         edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
         edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
         x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)

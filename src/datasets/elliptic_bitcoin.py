@@ -5,16 +5,15 @@ import torch_frame
 from torch_geometric.sampler import EdgeSamplerInput, NodeSamplerInput
 from torch_frame import stype
 from torch_frame.nn import (
-    EmbeddingEncoder,
+    ProjectionEncoder,
     LinearEncoder,
-    TimestampEncoder,
 )
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 
 import pandas as pd
 
 from .util.mask import PretrainType, set_target_col, create_mask
-from .util.graph import create_graph, add_ports, add_EgoIDs
+from .util.graph import create_graph, add_ports, add_EgoIDs_from_nodes
 from .util.split import apply_split
 
 import time
@@ -32,13 +31,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class EllipticBitcoin():
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False, channels=64):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False, ego=False, channels=64):
             self.root = root
             self.split_type = split_type
             self.splits = splits
             self.khop_neighbors = khop_neighbors
             self.pretrain = pretrain
             self.mask_type = mask_type
+            self.ego = ego
 
             logger.info(f'Creating edges...')
             self.edges = EllipticBitcoinTransactions(os.path.join(root, 'elliptic_txs_edgelist_mapped.csv'), ports=ports)
@@ -46,7 +46,7 @@ class EllipticBitcoin():
             self.edges.init_encoder(channels)
             logger.info(f'Edges created.')
             logger.info(f'Creating nodes...')
-            self.nodes = EllipticBitcoinNodes(os.path.join(root, 'elliptic_txs_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, khop_neighbors=khop_neighbors)
+            self.nodes = EllipticBitcoinNodes(os.path.join(root, 'elliptic_txs_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, khop_neighbors=khop_neighbors, ego=ego)
             self.nodes.materialize()
             self.nodes.init_encoder(channels)
             logger.info(f'Nodes created.')
@@ -157,22 +157,22 @@ class EllipticBitcoin():
             y, ids = batch.y[:, 0], batch.y[:, 1]
             khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
 
-            edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            edge_attr, _ = self.edges.encoder(edge_attr)
-
             nodes = torch.unique(torch.cat([khop_source, khop_destination]))
             nodes = torch.cat([ids.squeeze(), nodes[~torch.isin(nodes, ids)]]).type(torch.long)
-            node_attr = self.nodes.tensor_frame.__getitem__(nodes)
-            node_attr, _ = self.nodes.encoder(node_attr)
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
             local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
             edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
-            if args.ego:
+            node_attr = self.nodes.tensor_frame.__getitem__(nodes)
+            if self.ego:
                 batch_size = len(batch.y)
-                node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
+                node_attr = add_EgoIDs_from_nodes(node_attr, batch_size)
+            node_attr, _ = self.nodes.encoder(node_attr)
+
+            edge_attr = self.edges.tensor_frame.__getitem__(idx)
+            edge_attr, _ = self.edges.encoder(edge_attr)
             
             mask = y != 2 # mask out unknown class
             return node_attr, edge_index, edge_attr, y, mask
@@ -214,7 +214,7 @@ class EllipticBitcoinTransactions(torch_frame.data.Dataset):
             )
 
 class EllipticBitcoinNodes(torch_frame.data.Dataset):
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ego=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -222,6 +222,7 @@ class EllipticBitcoinNodes(torch_frame.data.Dataset):
             self.pretrain = pretrain
             self.mask_type = mask_type
             self.timestamp_col = '1'
+            self.ego = ego
 
             self.df = pd.read_csv(root, header=0)
             self.df['class'] = self.df['class'].apply(lambda x: 0 if x == '2' else x)
@@ -256,6 +257,9 @@ class EllipticBitcoinNodes(torch_frame.data.Dataset):
                 self.df['target'] = self.df.apply(lambda row: [row['class'], row['txId']], axis=1)
                 self.target_col = 'target'
                 col_to_stype['target'] = torch_frame.relation
+            if self.ego:
+                self.df['EgoID'] = 0
+                col_to_stype['EgoID'] = stype.relation
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
 
         def init_encoder(self, channels):
@@ -263,5 +267,5 @@ class EllipticBitcoinNodes(torch_frame.data.Dataset):
                 channels,
                 self.col_stats,
                 self.tensor_frame.col_names_dict,
-                {stype.numerical: LinearEncoder()}
+                {stype.numerical: LinearEncoder(), stype.relation: ProjectionEncoder()}
             )

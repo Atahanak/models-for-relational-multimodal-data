@@ -12,7 +12,7 @@ from torch_frame.nn import (
 import torch
 from torch_geometric.utils import degree
 
-from src.datasets import IBMTransactionsAML
+from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, OgbnArxiv
 from sklearn.metrics import f1_score
 from utils import *
 
@@ -24,8 +24,8 @@ torch.backends.cuda.enable_math_sdp(True)
 parser = create_parser()
 args = parser.parse_args()
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-#device = torch.device("cpu")
+#device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 config={
     "epochs": args.n_epochs,
     "batch_size": args.batch_size,
@@ -37,14 +37,20 @@ config={
     "reverse_mp": args.reverse_mp,
     "ego": args.ego,
     "ports": args.ports,
-    "lr": 5e-4,
-    "n_hidden": 64,
+    #"lr": 0.0004,
+    #"lr": 5e-4,
+    "lr": 0.0006116418195373612,
+    "n_hidden": 32,
     "n_gnn_layers": 2,
     "n_classes" : 2,
     "loss": "ce",
     "w_ce1": 1.,
-    "w_ce2": 6.,
-    "dropout": 0.10527690625126304,
+    #"w_ce2": 6.,
+    "w_ce2": 9.23,
+    "loss_weights": [1., 9.23],
+    #"w_ce2": 40.97,
+    "dropout": 0.083,
+    #"dropout": 0.10527690625126304,
     "task": "edge_classification"
 }
 
@@ -61,69 +67,104 @@ wandb.init(
 create_experiment_path(config) # type: ignore
 # Create a logger
 logger_setup()
+if 'ethereum-phishing-transaction-network' in config['data']:
+    dataset = EthereumPhishing(
+        root=config['data'],
+        split_type='temporal_daily', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        channels=config['n_hidden']
+    )
+    config['lr'] = 0.0008
+    config['dropout'] = 0.123
+    config['w_ce2'] = 1.16
+    config['n_gnn_layers'] = 2
+    config['n_hidden'] = 32
+elif 'elliptic_bitcoin_dataset' in config['data']:
+    dataset = EllipticBitcoin(
+        root=config['data'],
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        channels=config['n_hidden']
+    )
+elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
+    dataset = IBMTransactionsAML(
+        root=config['data'],
+        split_type='temporal_daily', 
+        splits=[0.6, 0.2, 0.2], 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        channels=config['n_hidden'],
+    )
+elif 'ogbn_arxiv' in config['data']:
+    dataset = OgbnArxiv(
+        root=config['data'],
+        split_type='temporal', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        channels=config['n_hidden']
+    )
+    config['task'] = 'node_classification'
+    config['n_classes'] = 40
+    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
+else:
+    raise ValueError("Invalid data name!")
+nodes = dataset.nodes
+edges = dataset.edges
 
-dataset = IBMTransactionsAML(
-    root=config['data'],
-    split_type='temporal_daily', 
-    splits=[0.6, 0.2, 0.2], 
-    khop_neighbors=args.num_neighs,
-    ports=args.ports
-)
-dataset.materialize()
-
-train_dataset, val_dataset, test_dataset = dataset.split()
+if config['task'] == 'node_classification':
+    train_dataset, val_dataset, test_dataset = nodes.split()
+else:
+    train_dataset, val_dataset, test_dataset = edges.split()
 
 if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnnfused':
-    edge_index = dataset.train_graph.edge_index
-    num_nodes = dataset.train_graph.num_nodes
+    edge_index = edges.train_graph.edge_index
+    num_nodes = edges.train_graph.num_nodes
     config["in_degrees"] = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
 
-tensor_frame = dataset.tensor_frame 
 train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
 val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 
-num_numerical = len(dataset.tensor_frame.col_names_dict[stype.numerical])
-num_categorical = len(dataset.tensor_frame.col_names_dict[stype.categorical])
+num_misc = len(edges.tensor_frame.col_names_dict[stype.relation]) if stype.relation in edges.tensor_frame.col_names_dict else 0
+num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in edges.tensor_frame.col_names_dict else 0
+num_categorical = len(edges.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in edges.tensor_frame.col_names_dict else 0
+num_timestamp = len(edges.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in edges.tensor_frame.col_names_dict else 0
+num_columns = num_numerical + num_categorical + num_timestamp + num_misc
+config['num_edge_features'] = num_columns
+logging.info(f"Number of edge features: {num_columns}")
 
-num_columns = num_numerical + num_categorical + 1
-config['num_columns'] = num_columns
-logging.info(f"num_numerical: {num_numerical}")
-logging.info(f"num_categorical: {num_categorical}")
-logging.info(f"num_columns: {num_columns}")
-
-
-stype_encoder_dict = {
-        stype.categorical: EmbeddingEncoder(),
-        stype.numerical: LinearEncoder(),
-        stype.timestamp: TimestampEncoder(),
-    }
+num_misc = len(nodes.tensor_frame.col_names_dict[stype.relation]) if stype.relation in nodes.tensor_frame.col_names_dict else 0
+num_numerical = len(nodes.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in nodes.tensor_frame.col_names_dict else 0
+num_categorical = len(nodes.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in nodes.tensor_frame.col_names_dict else 0
+num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in nodes.tensor_frame.col_names_dict else 0
+config['num_node_features'] = num_numerical + num_categorical + num_timestamp + num_misc
+logging.info(f"Number of node features: {config['num_node_features']}")
 
 if config['model'] == 'pna' or config['model'] == 'gin':
     model = GNN(
-                dataset.col_stats, 
-                dataset.tensor_frame.col_names_dict, 
-                stype_encoder_dict, 
                 config
             ).to(device)
 elif config['model'] == 'tabgnn':
     model = TABGNNS(
-                dataset.col_stats, 
-                dataset.tensor_frame.col_names_dict, 
-                stype_encoder_dict, 
                 config
             ).to(device)
 elif config['model'] == 'tabgnnfused':
     model = TABGNNFusedS(
-                dataset.col_stats, 
-                dataset.tensor_frame.col_names_dict, 
-                stype_encoder_dict, 
+                config
+            ).to(device)
+elif config['model'] == 'fttransformer':
+    model = TT(
                 config
             ).to(device)
 else:
     raise ValueError("Invalid model name!")
 
-loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config['w_ce1'], config['w_ce2']]).to(device))
+#loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config['w_ce1'], config['w_ce2']]).to(device))
+loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor(config['loss_weights']).to(device))
 optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
 
 best_val_f1 = 0
@@ -137,48 +178,17 @@ for epoch in range(config['epochs']):
         optimizer.zero_grad()
         batch_size = len(batch.y)
 
-        node_feats, edge_index, edge_attr, y = graph_inputs(dataset, batch, tensor_frame, mode='train', args=args)
-        # # convert tensorframe to tensor
-        # feats = []
-        # from datetime import datetime
-        # for stype in edge_attr.stypes:
-        #     # print(stype)
-        #     feat = edge_attr.feat_dict[stype]
-        #     # if feat dim is 3 convert to 2 by converting it to a timestamp
-        #     #import sys
-        #     if feat.dim() == 3:
-        #         # feat = torch.tensor([
-        #         #     int(datetime(year=arr[0][0], month=1, day=1, hour=arr[0][3], minute=arr[0][4], second=arr[0][5]).timestamp())
-        #         #     for arr in feat
-        #         # ]).t().unsqueeze(1)
-        #         # # Calculate the UNIX timestamp
-        #         # We assume there are 365 days per year and 30 days per month as an approximation
-        #         years_in_seconds = (feat[:, :, 0]) * 365 * 24 * 3600
-        #         months_in_seconds = (feat[:, :, 1]) * 30 * 24 * 3600
-        #         days_in_seconds = (feat[:, :, 2]) * 24 * 3600
-        #         hours_in_seconds = feat[:, :, 3] * 3600
-        #         minutes_in_seconds = feat[:, :, 4] * 60
-        #         seconds = feat[:, :, 5]
-
-        #         # Sum all components to get the UNIX timestamp
-        #         feat = years_in_seconds + months_in_seconds + days_in_seconds + hours_in_seconds + minutes_in_seconds + seconds
-        #         #normalize using col_stats
-        #     elif feat.dim() == 1:
-        #         feat = feat.unsqueeze(1)
-        #         #print(feat[:10])
-        #         #sys.exit()
-        #     # print(feat[:10])
-        #     # print(type(feat))
-        #     feats.append(feat)
-        # edge_attr = torch.cat(feats, dim=1)
-
+        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
 
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+        if mask is not None:
+            pred = pred[mask]
+            y = y[mask]
 
         preds.append(pred.argmax(dim=-1))
         ground_truths.append(y)
-        loss = loss_fn(pred, y.to(torch.long))
+        loss = loss_fn(pred, y.view(-1).to(torch.long))
         
         loss.backward()
         optimizer.step()
@@ -188,15 +198,18 @@ for epoch in range(config['epochs']):
             
     pred = torch.cat(preds, dim=0).detach().cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).detach().cpu().numpy()
-    f1 = f1_score(ground_truth, pred)
+    if config['n_classes'] == 2:
+        f1 = f1_score(ground_truth, pred)
+    else:
+        f1 = f1_score(ground_truth, pred, average='weighted')
     wandb.log({"f1/train": f1}, step=epoch)
     wandb.log({"Loss": total_loss/total_examples}, step=epoch)
     logging.info(f'Train F1: {f1:.4f}, Epoch: {epoch}')
     logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
 
     # evaluate
-    val_f1 = evaluate(val_loader, dataset, tensor_frame, model, device, args, 'val')
-    te_f1 = evaluate(test_loader, dataset, tensor_frame, model, device, args, 'test')
+    val_f1 = evaluate(val_loader, dataset, model, device, args, 'val', config)
+    te_f1 = evaluate(test_loader, dataset, model, device, args, 'test', config)
 
     wandb.log({"f1/validation": val_f1}, step=epoch)
     wandb.log({"f1/test": te_f1}, step=epoch)
@@ -208,8 +221,8 @@ for epoch in range(config['epochs']):
     elif val_f1 > best_val_f1:
         best_val_f1 = val_f1
         wandb.log({"best_test_f1": te_f1}, step=epoch)
-        if args.save_model:
-            save_model(model, optimizer, epoch, config)
+        # if args.save_model:
+        #     save_model(model, optimizer, epoch, config)
 
 
 

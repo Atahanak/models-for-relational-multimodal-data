@@ -3,6 +3,7 @@ from .ibm_transactions_for_aml import IBMTransactionsAML
 from .eth_phishing_transactions import EthereumPhishing, EthereumPhishingTransactions, EthereumPhishingNodes
 from .rel_hm import RelHM
 from .elliptic_bitcoin import EllipticBitcoin, EllipticBitcoinNodes, EllipticBitcoinTransactions
+from .ogbn_arxiv import OgbnArxiv, OgbnArxivNodes, OgbnArxivEdges
 
 __all__ = [
     'IBMTransactionsAML',
@@ -13,5 +14,8 @@ __all__ = [
     'RelHM',
     'EllipticBitcoin',
     'EllipticBitcoinNodes',
-    'EllipticBitcoinTransactions'
+    'EllipticBitcoinTransactions',
+    'OgbnArxiv',
+    'OgbnArxivNodes',
+    'OgbnArxivEdges'
 ]

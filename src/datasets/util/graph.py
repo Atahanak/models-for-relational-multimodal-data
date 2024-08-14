@@ -101,24 +101,45 @@ def add_ports(self):
         self.df['in_port'] = in_ports
         self.df['out_port'] = out_ports
 
-def add_EgoIDs(x, seed_edge_index):
-    device = x.device
-    ids = torch.zeros((x.shape[0], 1), device=device)
-    nodes = torch.unique(seed_edge_index.contiguous().view(-1)).to(device)
-    ids[nodes] = 1 
-    x = torch.cat([x, ids], dim=1)
-    return x
-
 # def add_EgoIDs(x, seed_edge_index):
 #     device = x.device
-#     # x is tensor_frame
-#     col_names_dict = x.col_names_dict
-#     col_names_dict[stype.numerical].append('ego_id')
-#     feat_dict = x.feat_dict
-
-#     ids = torch.zeros((len(feat_dict[stype.numerical]), 1), device=device)
+#     ids = torch.zeros((x.shape[0], 1), device=device)
 #     nodes = torch.unique(seed_edge_index.contiguous().view(-1)).to(device)
-#     ids[nodes] = 1
-#     feat_dict[stype.numerical] = torch.cat([feat_dict[stype.numerical], ids.unsqueeze(1)], dim=1)
-#     x = torch_frame.TensorFrame(feat_dict, col_names_dict, x.y)
+#     ids[nodes] = 1 
+#     x = torch.cat([x, ids], dim=1)
 #     return x
+
+def add_EgoIDs_from_nodes(x, batch_size):
+    device = x.device
+    feat_dict = x.feat_dict
+    col_names_dict = x.col_names_dict
+
+    ids = torch.zeros((len(feat_dict[stype.relation]), 1), device=device)
+    ids[:batch_size] = 1
+    index = col_names_dict[stype.relation].index('EgoID')
+    feat_dict[stype.relation][:, index] = ids.squeeze()
+    # print(index)
+    # print(x.feat_dict[stype.relation][:25, index])
+    # import sys
+    # sys.exit()
+    return x
+
+def add_EgoIDs(x, seed_edge_index):
+
+    device = x.device
+    feat_dict = x.feat_dict
+    col_names_dict = x.col_names_dict
+    # print(device)
+    # print(col_names_dict[stype.numerical])
+    # print(feat_dict)
+    ids = torch.zeros((len(feat_dict[stype.relation]), 1), device=device)
+    nodes = torch.unique(seed_edge_index.contiguous().view(-1)).to(device)
+    ids[nodes] = 1
+    # print(ids)
+    index = col_names_dict[stype.relation].index('EgoID')
+    feat_dict[stype.relation][:, index] = ids.squeeze()
+
+    # print(feat_dict)
+    # import sys
+    # sys.exit()
+    return x

@@ -17,7 +17,7 @@ from sklearn.metrics import f1_score
 from utils import *
 
 @torch.no_grad()
-def evaluate(loader, dataset, tensor_frame, model, device, args, mode):
+def evaluate(loader, dataset, model, device, args, mode):
     model.eval()
 
     '''Evaluates the model performance '''
@@ -101,13 +101,20 @@ if 'ethereum-phishing-transaction-network' in config['data']:
         split_type='temporal_daily', 
         khop_neighbors=args.num_neighs,
         ports=args.ports,
+        ego=args.ego,
         channels=config['n_hidden']
     )
+    config['lr'] = 0.0008
+    config['dropout'] = 0.123
+    config['w_ce2'] = 1.16
+    config['n_gnn_layers'] = 2
+    config['n_hidden'] = 32
 elif 'elliptic_bitcoin_dataset' in config['data']:
     dataset = EllipticBitcoin(
         root=config['data'],
         khop_neighbors=args.num_neighs,
         ports=args.ports,
+        ego=args.ego,
         channels=config['n_hidden']
     )
 else:
@@ -127,45 +134,39 @@ train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_s
 val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 
+num_misc = len(edges.tensor_frame.col_names_dict[stype.relation]) if stype.relation in edges.tensor_frame.col_names_dict else 0
 num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in edges.tensor_frame.col_names_dict else 0
 num_categorical = len(edges.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in edges.tensor_frame.col_names_dict else 0
 num_timestamp = len(edges.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in edges.tensor_frame.col_names_dict else 0
-num_columns = num_numerical + num_categorical + num_timestamp
+num_columns = num_numerical + num_categorical + num_timestamp + num_misc
 config['num_edge_features'] = num_columns
 logging.info(f"Number of edge features: {num_columns}")
 
+num_misc = len(nodes.tensor_frame.col_names_dict[stype.relation]) if stype.relation in nodes.tensor_frame.col_names_dict else 0
 num_numerical = len(nodes.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in nodes.tensor_frame.col_names_dict else 0
 num_categorical = len(nodes.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in nodes.tensor_frame.col_names_dict else 0
 num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in nodes.tensor_frame.col_names_dict else 0
-config['num_node_features'] = num_numerical + num_categorical + num_timestamp
+config['num_node_features'] = num_numerical + num_categorical + num_timestamp + num_misc
 logging.info(f"Number of node features: {config['num_node_features']}")
-
-
-stype_encoder_dict = {
-    stype.categorical: EmbeddingEncoder(),
-    stype.numerical: LinearEncoder(),
-    stype.timestamp: TimestampEncoder(),
-}
 
 if config['model'] == 'pna' or config['model'] == 'gin':
     model = GNN(
-                edges.col_stats, 
-                edges.tensor_frame.col_names_dict, 
-                stype_encoder_dict, 
                 config
             ).to(device)
 elif config['model'] == 'tabgnn':
     model = TABGNNS(
-                edges.col_stats, 
-                edges.tensor_frame.col_names_dict, 
-                stype_encoder_dict, 
                 config
             ).to(device)
 elif config['model'] == 'tabgnnfused':
     model = TABGNNFusedS(
-                edges.col_stats, 
-                edges.tensor_frame.col_names_dict, 
-                stype_encoder_dict, 
+                config
+            ).to(device)
+elif config['model'] == 'fttransformer':
+    model = TT(
+                config
+            ).to(device)
+elif config['model'] == 'trompt':
+    model = TROMPT(
                 config
             ).to(device)
 else:
@@ -189,12 +190,9 @@ for epoch in range(config['epochs']):
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
 
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
-        
         if mask is not None:
             pred = pred[mask]
             y = y[mask]
-        # print(pred)
-        # print(y)
 
         preds.append(pred.argmax(dim=-1))
         ground_truths.append(y)
@@ -215,8 +213,8 @@ for epoch in range(config['epochs']):
     logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
 
     # evaluate
-    val_f1 = evaluate(val_loader, dataset, edges.tensor_frame, model, device, args, 'val')
-    te_f1 = evaluate(test_loader, dataset, edges.tensor_frame, model, device, args, 'test')
+    val_f1 = evaluate(val_loader, dataset, model, device, args, 'val')
+    te_f1 = evaluate(test_loader, dataset, model, device, args, 'test')
 
     wandb.log({"f1/validation": val_f1}, step=epoch)
     wandb.log({"f1/test": te_f1}, step=epoch)

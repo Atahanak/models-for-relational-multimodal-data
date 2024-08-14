@@ -5,7 +5,7 @@ import torch_frame
 from torch_geometric.sampler import EdgeSamplerInput, NodeSamplerInput
 from torch_frame import stype
 from torch_frame.nn import (
-    EmbeddingEncoder,
+    ProjectionEncoder,
     LinearEncoder,
     TimestampEncoder,
 )
@@ -162,28 +162,25 @@ class EthereumPhishing():
     
         def get_graph_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
 
-            #ids = batch.get_col_feat("node")
             y, ids = batch.y[:, 0], batch.y[:, 1]
             khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
-            edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            edge_attr, _ = self.edges.encoder(edge_attr)
 
             nodes = torch.unique(torch.cat([khop_source, khop_destination]))
             nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]]).type(torch.long)
-
-            node_attr = self.tensor_frame.__getitem__(nodes)
-            node_attr, _ = self.nodes.encoder(node_attr)
-            # node_attr = torch.ones(len(nodes)).view(-1, len(nodes)).t()
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
             local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
             edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
+            edge_attr = self.edges.tensor_frame.__getitem__(idx)
+            edge_attr, _ = self.edges.encoder(edge_attr)
+
+            node_attr = self.tensor_frame.__getitem__(nodes)
             if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
-            #print(node_attr.shape, edge_index.shape, edge_attr.shape, y.shape)
+            node_attr, _ = self.nodes.encoder(node_attr)
 
             return node_attr, edge_index, edge_attr, y, None
 
@@ -256,8 +253,6 @@ class EthereumPhishingNodes(torch_frame.data.Dataset):
         self.root = root
         self.df = pd.read_csv(root)
         self.df['target'] = self.df.apply(lambda row: [row['label'], row['node']], axis=1)
-
-        self.df['node_attr'] = 1
         self.target_col = 'target'
 
         print(self.df.head())
@@ -266,9 +261,15 @@ class EthereumPhishingNodes(torch_frame.data.Dataset):
 
         self.df.reset_index(inplace=True)
         col_to_stype = {
-            'node_attr': stype.numerical,
             'target': stype.relation,
         }
+        if ego:
+            self.df['EgoID'] = 0
+            col_to_stype['EgoID'] = stype.relation
+        else:
+            self.df['node_attr'] = 1
+            col_to_stype['node_attr'] = stype.relation
+
         super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col)
     
     def init_encoder(self, channels):
@@ -276,5 +277,5 @@ class EthereumPhishingNodes(torch_frame.data.Dataset):
             channels,
             self.col_stats,
             self.tensor_frame.col_names_dict,
-            {stype.numerical: LinearEncoder()}
+            {stype.numerical: LinearEncoder(), stype.relation: ProjectionEncoder()}
         )

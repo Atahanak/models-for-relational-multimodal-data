@@ -34,7 +34,7 @@ class TABGNN(Module):
         # general parameters
         channels: int,
         num_layers: int,
-        encoder: Any,
+        #encoder: Any,
         # PNA parameters
         deg=None,
         node_dim: int = 1,
@@ -51,7 +51,7 @@ class TABGNN(Module):
         if num_layers <= 0:
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
-        self.encoder = encoder
+        #self.encoder = encoder
         self.channels = channels
         self.nhidden = nhidden
         self.node_dim = node_dim + channels
@@ -80,7 +80,7 @@ class TABGNN(Module):
 
     def get_shared_params(self):
         param_groups = [
-            self.encoder.parameters(),
+            #self.encoder.parameters(),
             [self.cls_embedding],  # Wrap single parameters in a list
             self.node_emb.parameters(),
             self.edge_emb.parameters(),
@@ -112,7 +112,10 @@ class TABGNN(Module):
         B = len(target_edge_attr)
         N = len(edge_attr)
         
+        # print("x: ", x.shape)
+        # print("edge_index: ", edge_index.shape)
         x_cls = self.cls_embedding.repeat(V, 1, 1)
+        # print("x_cls: ", x_cls.shape)
         x = torch.cat([x_cls, x], dim=1)
         target_edge_attr_x_cls = self.cls_embedding.repeat(B, 1, 1)
         target_edge_attr = torch.cat([target_edge_attr_x_cls, target_edge_attr], dim=1)
@@ -127,6 +130,7 @@ class TABGNN(Module):
             t_edge_attr = layer(t_edge_attr)
             t_target_edge_attr = layer(t_target_edge_attr)
         
+        # residual
         x = (x + t_x) / 2
         edge_attr = (edge_attr + t_edge_attr) / 2
         target_edge_attr = (target_edge_attr + t_target_edge_attr) / 2
@@ -137,6 +141,10 @@ class TABGNN(Module):
         target_edge_attr = self.edge_emb(target_edge_attr)
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
+
+        # x = x[:, 0, :]
+        # target_edge_attr = target_edge_attr[:, 0, :]
+        # edge_attr = edge_attr[:, 0, :]
 
         for layer in self.gnn_backbone:
             x, edge_attr = layer(x, edge_index, edge_attr)
