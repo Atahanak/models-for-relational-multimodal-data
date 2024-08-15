@@ -89,8 +89,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                'From Bank': torch_frame.categorical,
-                'To Bank': torch_frame.categorical,
+                #'From Bank': torch_frame.categorical,
+                #'To Bank': torch_frame.categorical,
                 'Payment Currency': torch_frame.categorical,
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
