@@ -2,7 +2,6 @@ import os
 import logging
 import sys
 import argparse
-from tqdm import tqdm
 from datetime import datetime
 import os 
 import os.path as osp 
@@ -10,14 +9,13 @@ import os.path as osp
 from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 import torch 
 import torch.nn as nn
-from sklearn.metrics import f1_score
 
 from src.nn.gnn.model import GINe, PNAS
 from src.nn.models import FTTransformer#, Trompt
 from src.nn.gnn.decoder import ClassifierHead, NodeClassificationHead
+from src.nn.decoder import MCMHead
 from src.nn.models import TABGNN
 from src.nn.models import TABGNNFused
-from src.utils.batch_processing import graph_inputs, node_inputs
 
 def logger_setup():
     # Setup logging
@@ -58,37 +56,6 @@ def create_parser():
 
     return parser
 
-@torch.no_grad()
-def evaluate(loader, dataset, model, device, args, mode, config):
-    model.eval()
-
-    '''Evaluates the model performance '''
-    preds = []
-    ground_truths = []
-    for batch in tqdm(loader, disable=not args.tqdm):
-        #select the seed edges from which the batch was created
-        batch_size = len(batch.y)
-        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
-
-        node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
-        with torch.no_grad():
-            pred = model(node_feats, edge_index, edge_attr)[:batch_size]
-            if mask is not None:
-                pred = pred[mask]
-                y = y[mask]
-            preds.append(pred.argmax(dim=-1))
-            ground_truths.append(y)
-
-    pred = torch.cat(preds, dim=0).cpu().numpy()
-    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-    if config['n_classes'] == 2:
-        f1 = f1_score(ground_truth, pred)
-    else:
-        f1 = f1_score(ground_truth, pred, average='weighted')
-
-    model.train()
-    return f1
-
 def save_model(model, optimizer, epoch, config, ):
     # Save the model in a dictionary
     torch.save({
@@ -125,6 +92,7 @@ class TT(nn.Module):
             out = self.classifier(x_cls, edge_index, e_cls)
         elif self.config['task'] == 'node_classification':
             out = self.classifier(x_cls)
+
         return out
 
     def get_model(self, config):
@@ -165,10 +133,8 @@ class GNN(nn.Module):
     def get_graph_model(self, config):
         
         n_feats = config['num_node_features']
-        #n_dim = n_feats
         n_dim = n_feats*config['n_hidden'] 
         e_dim = config['num_edge_features'] * config['n_hidden']
-        #e_dim = config['num_edge_features']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
@@ -206,16 +172,27 @@ class TABGNNS(nn.Module):
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
             self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'node_classification-mcm_edge_table':
+            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
     
     def forward(self, x, edge_index, edge_attr):
-        edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
-        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
-        x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
-        #out = self.classifier(x, target_edge_index, target_edge_attr)
+
+        #x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
+        x, edge_attr = self.model(x, edge_index, edge_attr)
+
         if self.config['task'] == 'edge_classification':
+            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
             out = self.classifier(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
             out = self.classifier(x)
+        elif self.config['task'] == 'node_classification-mcm_edge_table':
+            out = self.classifier(x)
+            x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+            x_target = torch.cat((x_target, edge_attr), 1)
+            out2 = self.mcm(x_target)
+            return {"supervised": out, "mcm": out2}
         return out
 
     def get_model(self, config):

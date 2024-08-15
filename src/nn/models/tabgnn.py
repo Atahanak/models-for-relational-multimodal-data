@@ -98,7 +98,8 @@ class TABGNN(Module):
             if param.grad is not None:
                 param.grad.data.zero_()
 
-    def forward(self, x, edge_index, edge_attr, target_edge_attr) -> Tensor:
+    #def forward(self, x, edge_index, edge_attr, target_edge_attr) -> Tensor:
+    def forward(self, x, edge_index, edge_attr) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -109,7 +110,7 @@ class TABGNN(Module):
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
         V = len(x)
-        B = len(target_edge_attr)
+        #B = len(target_edge_attr)
         N = len(edge_attr)
         
         # print("x: ", x.shape)
@@ -117,28 +118,28 @@ class TABGNN(Module):
         x_cls = self.cls_embedding.repeat(V, 1, 1)
         # print("x_cls: ", x_cls.shape)
         x = torch.cat([x_cls, x], dim=1)
-        target_edge_attr_x_cls = self.cls_embedding.repeat(B, 1, 1)
-        target_edge_attr = torch.cat([target_edge_attr_x_cls, target_edge_attr], dim=1)
+        # target_edge_attr_x_cls = self.cls_embedding.repeat(B, 1, 1)
+        # target_edge_attr = torch.cat([target_edge_attr_x_cls, target_edge_attr], dim=1)
         edge_attr_cls = self.cls_embedding.repeat(N, 1, 1)
         edge_attr = torch.cat([edge_attr_cls, edge_attr], dim=1)
 
         t_x = x
         t_edge_attr = edge_attr
-        t_target_edge_attr = target_edge_attr
+        # t_target_edge_attr = target_edge_attr
         for layer in self.tabular_backbone:
             t_x = layer(t_x)
             t_edge_attr = layer(t_edge_attr)
-            t_target_edge_attr = layer(t_target_edge_attr)
+            # t_target_edge_attr = layer(t_target_edge_attr)
         
         # residual
         x = (x + t_x) / 2
         edge_attr = (edge_attr + t_edge_attr) / 2
-        target_edge_attr = (target_edge_attr + t_target_edge_attr) / 2
+        # target_edge_attr = (target_edge_attr + t_target_edge_attr) / 2
         
         x = x.view(-1, self.node_dim)
         x = self.node_emb(x)
-        target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
-        target_edge_attr = self.edge_emb(target_edge_attr)
+        # target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
+        # target_edge_attr = self.edge_emb(target_edge_attr)
         edge_attr = edge_attr.view(-1, self.edge_dim)
         edge_attr = self.edge_emb(edge_attr)
 
@@ -149,7 +150,7 @@ class TABGNN(Module):
         for layer in self.gnn_backbone:
             x, edge_attr = layer(x, edge_index, edge_attr)
 
-        return x, edge_attr, target_edge_attr
+        return x, edge_attr#, target_edge_attr
 
 class PNALayer(Module):
     def __init__(self, channels: int, nhidden: int = 128, deg=None, reverse_mp: bool = False):

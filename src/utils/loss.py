@@ -40,7 +40,7 @@ class SSLoss:
     
     def mcm_loss(self, cat_out, num_out, y):
         y_val, y_idx = y[:, 0], y[:, 1].long()
-        
+
         # Separate categorical and numerical indices
         cat_mask = y_idx >= self.num_numerical
         num_mask = ~cat_mask
@@ -50,9 +50,11 @@ class SSLoss:
         cat_targets = y_val[cat_mask].long()
         
         cat_loss = torch.tensor(0.0, device=y.device)
+        acc = torch.tensor(0.0, device=y.device)
         cat_sample_indices = torch.where(cat_mask)[0]
         for i, (idx, target) in enumerate(zip(cat_indices, cat_targets)):
             cat_loss += F.cross_entropy(cat_out[idx][cat_sample_indices[i]], target)
+            acc += torch.argmax(cat_out[idx][cat_sample_indices[i]], dim=1) == target
         
         # Numerical loss
         num_preds = num_out[num_mask, y_idx[num_mask]]
@@ -63,11 +65,11 @@ class SSLoss:
         t_n = num_mask.sum().item()
         
         if t_c == 0:
-            return torch.sqrt(num_loss / t_n), (cat_loss, t_c), (num_loss, t_n)
+            return torch.sqrt(num_loss / t_n), (cat_loss, t_c, acc), (num_loss, t_n)
         elif t_n == 0:
             return cat_loss / t_c, (cat_loss, t_c), (num_loss, t_n)
         
-        return (cat_loss / t_c) + torch.sqrt(num_loss / t_n), (cat_loss, t_c), (num_loss, t_n)
+        return (cat_loss / t_c) + torch.sqrt(num_loss / t_n), (cat_loss, t_c, acc), (num_loss, t_n)
 
     def mv_loss(self, mv_out, y):
         """
