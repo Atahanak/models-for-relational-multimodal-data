@@ -94,13 +94,14 @@ wandb.init(
     dir=args.wandb_dir,
     mode="disabled" if args.testing else "online",
     project="rel-mm-supervised-mcm", #replace this with your wandb project name if you want to use wandb logging
+    group=args.group,
     entity="cse3000",
     config=config
 )
 
-create_experiment_path(config) # type: ignore
-# Create a logger
+config['experiment_path'] = args.wandb_dir
 logger_setup()
+
 if 'ethereum-phishing-transaction-network' in config['data']:
     dataset = EthereumPhishing(
         root=config['data'],
@@ -124,6 +125,7 @@ elif 'elliptic_bitcoin_dataset' in config['data']:
         ego=args.ego,
         channels=config['n_hidden']
     )
+    config['task'] = 'node_classification'
 elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
     dataset = IBMTransactionsAML(
         root=config['data'],
@@ -133,6 +135,7 @@ elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
         ports=args.ports,
         channels=config['n_hidden'],
     )
+    config['task'] = 'edge_classification'
 elif 'ogbn_arxiv' in config['data']:
     dataset = OgbnArxiv(
         root=config['data'],

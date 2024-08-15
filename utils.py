@@ -53,6 +53,7 @@ def create_parser():
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
     parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
+    parser.add_argument("--group", default="null", type=str, help="wandb group", required=False)
 
     return parser
 
@@ -66,15 +67,6 @@ def save_model(model, optimizer, epoch, config, ):
             osp.join(config['experiment_path'], str(epoch)+ '.tar')
             )
     
-def create_experiment_path(config):
-    """
-    Get unique experiment id
-    """
-    run_str = '{date:%m-%d_%H:%M:%S.%f}'.format(date=datetime.now())
-    config['experiment_path'] = osp.join(config['output_path'], 'experiments', run_str)
-    os.makedirs(config['experiment_path'])
-    return
-
 class TT(nn.Module):
     def __init__(self, config):
         super().__init__()

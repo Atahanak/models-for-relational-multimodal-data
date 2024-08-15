@@ -158,7 +158,9 @@ class OgbnArxiv():
         khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
 
         nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-        nodes = torch.cat([ids.squeeze(), nodes[~torch.isin(nodes, ids)]]).type(torch.long)
+        if len(ids.shape) > 1:
+            ids = ids.squeeze()
+        nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]]).type(torch.long)
 
         n_id_map = {value.item(): index for index, value in enumerate(nodes)}
         local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)

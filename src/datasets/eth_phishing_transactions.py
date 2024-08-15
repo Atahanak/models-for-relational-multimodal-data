@@ -165,6 +165,8 @@ class EthereumPhishing():
             khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
 
             nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+            if len(ids.shape) > 1:
+                ids = ids.squeeze()
             nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]]).type(torch.long)
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
