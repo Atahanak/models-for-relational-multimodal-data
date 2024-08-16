@@ -136,6 +136,11 @@ elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
         channels=config['n_hidden'],
     )
     config['task'] = 'edge_classification'
+    config['lr'] = 0.0005
+    config['dropout'] = 0.10527690625126304
+    config['w_ce2'] = 6
+    config['n_gnn_layers'] = 2
+    config['n_hidden'] = 64
 elif 'ogbn_arxiv' in config['data']:
     dataset = OgbnArxiv(
         root=config['data'],
