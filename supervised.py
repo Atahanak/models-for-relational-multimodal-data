@@ -103,6 +103,12 @@ config['experiment_path'] = args.wandb_dir
 logger_setup()
 
 if 'ethereum-phishing-transaction-network' in config['data']:
+    config['lr'] = 0.0008
+    config['dropout'] = 0.123
+    config['w_ce2'] = 1.16
+    config['n_gnn_layers'] = 2
+    config['n_hidden'] = 32
+    config['task'] = 'node_classification'
     dataset = EthereumPhishing(
         root=config['data'],
         split_type='temporal_daily', 
@@ -111,13 +117,8 @@ if 'ethereum-phishing-transaction-network' in config['data']:
         ego=args.ego,
         channels=config['n_hidden']
     )
-    config['lr'] = 0.0008
-    config['dropout'] = 0.123
-    config['w_ce2'] = 1.16
-    config['n_gnn_layers'] = 2
-    config['n_hidden'] = 32
-    config['task'] = 'node_classification'
 elif 'elliptic_bitcoin_dataset' in config['data']:
+    config['task'] = 'node_classification'
     dataset = EllipticBitcoin(
         root=config['data'],
         khop_neighbors=args.num_neighs,
@@ -125,8 +126,13 @@ elif 'elliptic_bitcoin_dataset' in config['data']:
         ego=args.ego,
         channels=config['n_hidden']
     )
-    config['task'] = 'node_classification'
 elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
+    config['task'] = 'edge_classification'
+    config['lr'] = 0.0005
+    config['dropout'] = 0.10527690625126304
+    config['w_ce2'] = 6
+    config['n_gnn_layers'] = 2
+    config['n_hidden'] = 64
     dataset = IBMTransactionsAML(
         root=config['data'],
         split_type='temporal_daily', 
@@ -135,13 +141,10 @@ elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
         ports=args.ports,
         channels=config['n_hidden'],
     )
-    config['task'] = 'edge_classification'
-    config['lr'] = 0.0005
-    config['dropout'] = 0.10527690625126304
-    config['w_ce2'] = 6
-    config['n_gnn_layers'] = 2
-    config['n_hidden'] = 64
 elif 'ogbn_arxiv' in config['data']:
+    config['task'] = 'node_classification'
+    config['n_classes'] = 40
+    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
     dataset = OgbnArxiv(
         root=config['data'],
         split_type='temporal', 
@@ -150,9 +153,6 @@ elif 'ogbn_arxiv' in config['data']:
         ego=args.ego,
         channels=config['n_hidden']
     )
-    config['task'] = 'node_classification'
-    config['n_classes'] = 40
-    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
 else:
     raise ValueError("Invalid data name!")
 nodes = dataset.nodes

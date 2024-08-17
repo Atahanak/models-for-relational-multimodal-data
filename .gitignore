@@ -170,4 +170,5 @@ wandb/
 saved_models/
 scripts/
 outputs/
+slurm/
 environment_root.yml
