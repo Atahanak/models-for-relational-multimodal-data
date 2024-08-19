@@ -12,7 +12,7 @@ from torch_frame.nn import (
 import torch
 from torch_geometric.utils import degree
 
-from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, OgbnArxiv
+from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, OgbnArxiv, MusaeGitHub, LastFMAsia
 from sklearn.metrics import f1_score
 from utils import *
 
@@ -61,7 +61,7 @@ args = parser.parse_args()
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #device = torch.device("cpu")
 config={
-    "epochs": args.n_epochs,
+    "epochs": args.epochs,
     "batch_size": args.batch_size,
     "model": args.model,
     "data": args.data,
@@ -153,6 +153,30 @@ elif 'ogbn_arxiv' in config['data']:
         ego=args.ego,
         channels=config['n_hidden']
     )
+elif 'git_web_ml' in config['data']:
+    config['task'] = 'node_classification'
+    dataset = MusaeGitHub(
+        root=config['data'],
+        split_type='random', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        #splits=[0.8, 0.0, 0.2],
+        channels=config['n_hidden']
+    )
+elif 'lastfm_asia' in config['data']:
+    config['task'] = 'node_classification'
+    config['n_hidden'] = 8
+    dataset = LastFMAsia(
+        root=config['data'],
+        split_type='random', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        channels=config['n_hidden']
+    )
+    config['n_classes'] = dataset.num_classes
+    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
 else:
     raise ValueError("Invalid data name!")
 nodes = dataset.nodes
@@ -211,6 +235,7 @@ loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor(config['loss_weight
 optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
 
 best_val_f1 = 0
+best_te_f1 = 0
 for epoch in range(config['epochs']):
     total_loss = total_examples = 0
     preds = []
@@ -255,6 +280,7 @@ for epoch in range(config['epochs']):
 
     # evaluate
     val_f1 = evaluate(val_loader, dataset, model, device, args, 'val', config)
+    #val_f1 = 0
     te_f1 = evaluate(test_loader, dataset, model, device, args, 'test', config)
 
     wandb.log({"f1/validation": val_f1}, step=epoch)
@@ -265,10 +291,14 @@ for epoch in range(config['epochs']):
     if epoch == 0:
         wandb.log({"best_test_f1": te_f1}, step=epoch)
     elif val_f1 > best_val_f1:
+    #elif te_f1 > best_te_f1:
         best_val_f1 = val_f1
+        best_te_f1 = te_f1
         wandb.log({"best_test_f1": te_f1}, step=epoch)
         # if args.save_model:
         #     save_model(model, optimizer, epoch, config)
+    # logging.info(f'Best Validation F1: {best_val_f1:.4f}')
+    logging.info(f'Best Test F1: {best_te_f1:.4f}')
 
 
 

@@ -17,7 +17,9 @@ def apply_split(df: pd.DataFrame, split_type: str, splits: list, timestamp_col: 
 
 
 def random_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
+    # generate a random number for each row and assign it to the split column
     df['split'] = torch_frame.utils.generate_random_split(length=len(df), seed=0, train_ratio=splits[0], val_ratio=splits[1])
+    #df['split'] = np.random.choice(range(len(splits)), df.shape[0], p=splits)
     return df
 
 

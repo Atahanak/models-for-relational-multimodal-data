@@ -40,7 +40,7 @@ def create_parser():
     parser.add_argument("--ego", action='store_true', help="Use ego IDs in GNN training")
     parser.add_argument("--ports", action='store_true', help="Use ports in GNN training")
     parser.add_argument("--batch_size", default=200, type=int, help="Select the batch size for GNN training")
-    parser.add_argument("--n_epochs", default=100, type=int, help="Select the number of epochs for GNN training")
+    parser.add_argument("--epochs", default=100, type=int, help="Select the number of epochs for GNN training")
     parser.add_argument('--num_neighs', nargs='+', type=int, default=[100,100], help='Pass the number of neighors to be sampled in each hop (descending).')
     
 
@@ -95,7 +95,8 @@ class TT(nn.Module):
         if config['model'] == "fttransformer":
             model = FTTransformer(
                 channels=config["n_hidden"],
-                num_layers=config['n_gnn_layers']
+                num_layers=config['n_gnn_layers'],
+                #nhead=config['nhead'],
             )
         elif config['model'] == "trompt":
             ValueError("TROMPT model not implemented yet!")
@@ -125,8 +126,10 @@ class GNN(nn.Module):
     def get_graph_model(self, config):
         
         n_feats = config['num_node_features']
-        n_dim = n_feats*config['n_hidden'] 
-        e_dim = config['num_edge_features'] * config['n_hidden']
+        #n_dim = n_feats*config['n_hidden'] 
+        n_dim = n_feats 
+        #e_dim = config['num_edge_features'] * config['n_hidden']
+        e_dim = config['num_edge_features']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
@@ -222,18 +225,34 @@ class TABGNNFusedS(nn.Module):
         self.config = config
         self.batch_size = config['batch_size']
         self.model = self.get_model(config)
-        self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        if config['task'] == 'edge_classification':
+            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'node_classification':
+            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'node_classification-mcm_edge_table':
+            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
     
     def forward(self, x, edge_index, edge_attr):
-        edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
-        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
-        x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)
-        out = self.classifier(x, target_edge_index, target_edge_attr)
+        x, edge_attr = self.model(x, edge_index, edge_attr)
+        if self.config['task'] == 'edge_classification':
+            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+            out = self.classifier(x, target_edge_index, target_edge_attr)
+        elif self.config['task'] == 'node_classification':
+            out = self.classifier(x[:, 0, :])
+        elif self.config['task'] == 'node_classification-mcm_edge_table':
+            out = self.classifier(x)
+            x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+            x_target = torch.cat((x_target, edge_attr), 1)
+            out2 = self.mcm(x_target)
+            return {"supervised": out, "mcm": out2}
         return out
 
     def get_model(self, config):
         
-        n_feats = 2 if config['ego'] else 1
+        n_feats = config['num_node_features']
+        n_dim = n_feats*config['n_hidden'] 
         e_dim = config['num_edge_features'] * config['n_hidden']
 
         if config['model'] == "tabgnnfused":
@@ -244,8 +263,8 @@ class TABGNNFusedS(nn.Module):
             in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
             in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
             model = TABGNNFused(
-                node_dim=n_feats, 
-                encoder=self.encoder,
+                node_dim=n_dim, 
+                #encoder=self.encoder,
                 nhidden=config['n_hidden'], 
                 channels=config['n_hidden'], 
                 num_layers=config['n_gnn_layers'], 

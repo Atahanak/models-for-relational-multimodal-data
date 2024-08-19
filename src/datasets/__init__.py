@@ -4,6 +4,8 @@ from .eth_phishing_transactions import EthereumPhishing, EthereumPhishingTransac
 from .rel_hm import RelHM
 from .elliptic_bitcoin import EllipticBitcoin, EllipticBitcoinNodes, EllipticBitcoinTransactions
 from .ogbn_arxiv import OgbnArxiv, OgbnArxivNodes, OgbnArxivEdges
+from .musae_github import MusaeGitHub
+from .lastfm_asia import LastFMAsia
 
 __all__ = [
     'IBMTransactionsAML',
@@ -17,5 +19,7 @@ __all__ = [
     'EllipticBitcoinTransactions',
     'OgbnArxiv',
     'OgbnArxivNodes',
-    'OgbnArxivEdges'
+    'OgbnArxivEdges',
+    'MusaeGitHub',
+    'LastFMAsia'
 ]

@@ -73,4 +73,7 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
             del col_to_stype['mask']
     else:
         self.target_col = ''
+    
+    if supervised_col is not None:
+        self.df['target'] = self.df['target'] + self.df[supervised_col]
     return col_to_stype

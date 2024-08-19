@@ -58,6 +58,7 @@ class FTTransformer(Module):
         channels: int,
         #out_channels: int,
         num_layers: int,
+        nhead:int = 8,
         # encoder,
         # decoder
         # col_stats: dict[str, dict[StatType, Any]],
@@ -87,7 +88,8 @@ class FTTransformer(Module):
         # )
         
         self.backbone = FTTransformerConvs(channels=channels,
-                                           num_layers=num_layers)
+                                           num_layers=num_layers,
+                                           nhead=nhead)
         
         # if pretrain:
         #     num_numerical = len(col_names_dict[stype.numerical])
