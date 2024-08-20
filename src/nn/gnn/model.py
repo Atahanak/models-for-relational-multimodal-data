@@ -118,9 +118,12 @@ class GINe(torch.nn.Module):
 
     def forward(self, x, edge_index, edge_attr):
         src, dst = edge_index
-
-        x = self.node_emb(x)
-        edge_attr = self.edge_emb(edge_attr.view(edge_attr.shape[0], -1))
+        x = self.node_emb(x.view(x.shape[0], -1))
+        #x = self.node_emb(x)
+        #edge_attr = self.edge_emb(edge_attr.view(edge_attr.shape[0], -1))
+        edge_attr = self.edge_emb(edge_attr)
+        # x = self.node_emb(x)
+        # edge_attr = self.edge_emb(edge_attr.view(edge_attr.shape[0], -1))
 
         for i in range(self.num_gnn_layers):
             x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2
@@ -183,7 +186,8 @@ class PNAS(torch.nn.Module):
     def forward(self, x, edge_index, edge_attr):
         x = self.node_emb(x.view(x.shape[0], -1))
         #x = self.node_emb(x)
-        edge_attr = self.edge_emb(edge_attr.view(edge_attr.shape[0], -1))
+        #edge_attr = self.edge_emb(edge_attr.view(edge_attr.shape[0], -1))
+        edge_attr = self.edge_emb(edge_attr)
 
         for i in range(self.num_gnn_layers):
             x = (x + F.relu(self.batch_norms[i](self.convs[i](x, edge_index, edge_attr)))) / 2

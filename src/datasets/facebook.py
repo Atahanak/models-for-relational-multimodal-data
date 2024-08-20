@@ -31,7 +31,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class MusaeGitHub():
+class Facebook():
         def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False, ego=False, channels=64):
             self.root = root
             self.split_type = split_type
@@ -42,14 +42,15 @@ class MusaeGitHub():
             self.ego = ego
 
             logger.info(f'Creating edges...')
-            self.edges = MusaeGithubEdges(os.path.join(root, 'musae_git_edges.csv'), ports=ports)
+            self.edges = FacebookEdges(os.path.join(root, 'musae_facebook_edges.csv'), ports=ports)
             self.edges.materialize()
             self.edges.init_encoder(channels)
             logger.info(f'Edges created.')
             logger.info(f'Creating nodes...')
-            self.nodes = MusaeGithubNodes(os.path.join(root, 'musae_git_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, ego=ego)
+            self.nodes = FacebookNodes(os.path.join(root, 'musae_facebook_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, ego=ego)
             logger.info(f'Nodes created.')
             self.emb = torch.nn.Embedding(self.nodes.max_cat+1, channels)
+            self.num_classes = self.nodes.df['page_type'].nunique()
             
             self.num_columns = [col for col in self.nodes.df.columns]
             self.cat_columns = []
@@ -190,7 +191,7 @@ class MusaeGitHub():
         def split(self):
             return self.nodes.split()
 
-class MusaeGithubEdges(torch_frame.data.Dataset):
+class FacebookEdges(torch_frame.data.Dataset):
         def __init__(self, root, khop_neighbors=[100,100], ports=False):
             self.root = root
             self.khop_neighbors = khop_neighbors
@@ -283,7 +284,7 @@ class MusaeGithubEdges(torch_frame.data.Dataset):
 #                 {stype.numerical: LinearEncoder(), stype.relation: ProjectionEncoder(), stype.categorical: EmbeddingEncoder()}
 #             )
 
-class MusaeGithubNodes(torch.utils.data.Dataset):
+class FacebookNodes(torch.utils.data.Dataset):
 
         def __init__(self, root=None, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='random', splits=[0.6, 0.2, 0.2],  ego=False, df=None):
             
@@ -303,14 +304,14 @@ class MusaeGithubNodes(torch.utils.data.Dataset):
             print(self.df.describe())
             #self.df.reset_index(inplace=True)
 
-            self.cat_columns = [col for col in self.df.columns if col != 'name' and col != 'ml_target' and col != 'id' and col != 'split']
+            self.cat_columns = [col for col in self.df.columns if col != 'page_type' and col != 'id' and col != 'split']
             print(self.cat_columns)
             print(len(self.cat_columns))
             if df is None:
                 # add one to all cat_columns to avoid -1 indexing
                 for col in self.cat_columns:
                     self.df[col] = self.df[col] + 1
-            self.label_cols = ['ml_target', 'id']
+            self.label_cols = ['page_type', 'id']
             
             self.features = torch.tensor(self.df[self.cat_columns].values.astype(int))
             print(self.features.shape)
@@ -343,5 +344,5 @@ class MusaeGithubNodes(torch.utils.data.Dataset):
             print(self.df[self.df['split'] == 0].shape)
             print(self.df[self.df['split'] == 1].shape)
             print(self.df[self.df['split'] == 2].shape)
-            return MusaeGithubNodes(df=self.df[self.df['split'] == 0]), MusaeGithubNodes(df=self.df[self.df['split'] == 1]), MusaeGithubNodes(df=self.df[self.df['split'] == 2])
+            return FacebookNodes(df=self.df[self.df['split'] == 0]), FacebookNodes(df=self.df[self.df['split'] == 1]), FacebookNodes(df=self.df[self.df['split'] == 2])
 

@@ -126,13 +126,13 @@ class GNN(nn.Module):
     def get_graph_model(self, config):
         
         n_feats = config['num_node_features']
-        #n_dim = n_feats*config['n_hidden'] 
         n_dim = n_feats 
-        #e_dim = config['num_edge_features'] * config['n_hidden']
+        n_dim = n_feats*config['n_hidden'] 
         e_dim = config['num_edge_features']
+        #e_dim = config['num_edge_features'] * config['n_hidden']
 
         if config['model'] == "gin":
-            model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
+            model = GINe(num_features=n_dim, num_gnn_layers=config['n_gnn_layers'], 
                          n_hidden=config['n_hidden'], 
                          edge_updates=config['emlps'], 
                          edge_dim=e_dim, 
@@ -195,8 +195,8 @@ class TABGNNS(nn.Module):
         n_feats = config['num_node_features']
         #n_dim = n_feats
         n_dim = n_feats*config['n_hidden'] 
-        e_dim = config['num_edge_features'] * config['n_hidden']
-        #e_dim = config['num_edge_features']
+        #e_dim = config['num_edge_features'] * config['n_hidden']
+        e_dim = config['num_edge_features']
 
         if config['model'] == "tabgnn":
             if config['in_degrees'] is None:

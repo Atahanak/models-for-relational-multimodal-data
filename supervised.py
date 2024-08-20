@@ -2,7 +2,8 @@ import logging
 import wandb
 from tqdm import tqdm as tqdm
 
-from torch_frame.data import DataLoader
+#from torch_frame.data import DataLoader
+from torch.utils.data import DataLoader
 from torch_frame import stype
 from torch_frame.nn import (
     EmbeddingEncoder,
@@ -12,7 +13,7 @@ from torch_frame.nn import (
 import torch
 from torch_geometric.utils import degree
 
-from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, OgbnArxiv, MusaeGitHub, LastFMAsia
+from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, OgbnArxiv, MusaeGitHub, LastFMAsia, WikiSquirrel, WikiChameleon, Facebook
 from sklearn.metrics import f1_score
 from utils import *
 
@@ -30,12 +31,13 @@ def evaluate(loader, dataset, model, device, args, mode, config):
     ground_truths = []
     for batch in tqdm(loader, disable=not args.tqdm):
         #select the seed edges from which the batch was created
-        batch_size = len(batch.y)
+        batch_size = len(batch[0])
         node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
 
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         with torch.no_grad():
             pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+
             if mask is not None:
                 pred = pred[mask]
                 y = y[mask]
@@ -47,13 +49,13 @@ def evaluate(loader, dataset, model, device, args, mode, config):
     if config['n_classes'] == 2:
         f1 = f1_score(ground_truth, pred)
     else:
-        f1 = f1_score(ground_truth, pred, average='weighted')
+        f1 = f1_score(ground_truth, pred, average='micro')
     acc = (pred == ground_truth).mean()
-    wandb.log({f"{mode}_acc": acc}, step=epoch)
-    logging.info(f'{mode} acc: {acc:.4f}')
+    # wandb.log({f"{mode}_acc": acc}, step=epoch)
+    # logging.info(f'{mode} acc: {acc:.4f}')
 
     model.train()
-    return f1
+    return f1, acc
 
 parser = create_parser()
 args = parser.parse_args()
@@ -155,15 +157,61 @@ elif 'ogbn_arxiv' in config['data']:
     )
 elif 'git_web_ml' in config['data']:
     config['task'] = 'node_classification'
+    config['num_gnn_layers'] = 4
     dataset = MusaeGitHub(
         root=config['data'],
         split_type='random', 
         khop_neighbors=args.num_neighs,
         ports=args.ports,
         ego=args.ego,
-        #splits=[0.8, 0.0, 0.2],
+        splits=[0.7, 0.15, 0.15],
         channels=config['n_hidden']
     )
+elif 'squirrel' in config['data']:
+    config['task'] = 'node_classification'
+    config['n_hidden'] = 32
+    config['num_gnn_layers'] = 2
+    dataset = WikiSquirrel(
+        root=config['data'],
+        split_type='random', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        splits=[0.6, 0.2, 0.2],
+        channels=config['n_hidden']
+    )
+    config['n_classes'] = dataset.num_classes
+    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
+elif 'chameleon' in config['data']:
+    config['task'] = 'node_classification'
+    config['num_gnn_layers'] = 2
+    dataset = WikiChameleon(
+        root=config['data'],
+        split_type='random', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        splits=[0.6, 0.2, 0.2],
+        channels=config['n_hidden']
+    )
+    #config['dropout'] = 0.5
+    config['n_classes'] = dataset.num_classes
+    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
+elif 'facebook' in config['data']:
+    config['task'] = 'node_classification'
+    config['num_gnn_layers'] = 2
+    dataset = Facebook(
+        root=config['data'],
+        split_type='random', 
+        khop_neighbors=args.num_neighs,
+        ports=args.ports,
+        ego=args.ego,
+        splits=[0.6, 0.2, 0.2],
+        channels=config['n_hidden']
+    )
+    #config['dropout'] = 0.5
+    config['n_classes'] = dataset.num_classes
+    config['loss_weights'] = [1 for _ in range(config['n_classes'])]
 elif 'lastfm_asia' in config['data']:
     config['task'] = 'node_classification'
     config['n_hidden'] = 8
@@ -183,7 +231,7 @@ nodes = dataset.nodes
 edges = dataset.edges
 
 if config['task'] == 'node_classification':
-    train_dataset, val_dataset, test_dataset = nodes.split()
+    train_dataset, val_dataset, test_dataset = dataset.split()
 else:
     train_dataset, val_dataset, test_dataset = edges.split()
 
@@ -192,9 +240,12 @@ if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] ==
     num_nodes = edges.train_graph.num_nodes
     config["in_degrees"] = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
 
-train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
-val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
-test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
+#train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
+#val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
+#test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
+train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True, num_workers=4)
+val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=4)
+test_loader = DataLoader(test_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 
 num_misc = len(edges.tensor_frame.col_names_dict[stype.relation]) if stype.relation in edges.tensor_frame.col_names_dict else 0
 num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in edges.tensor_frame.col_names_dict else 0
@@ -204,11 +255,12 @@ num_columns = num_numerical + num_categorical + num_timestamp + num_misc
 config['num_edge_features'] = num_columns
 logging.info(f"Number of edge features: {num_columns}")
 
-num_misc = len(nodes.tensor_frame.col_names_dict[stype.relation]) if stype.relation in nodes.tensor_frame.col_names_dict else 0
-num_numerical = len(nodes.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in nodes.tensor_frame.col_names_dict else 0
-num_categorical = len(nodes.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in nodes.tensor_frame.col_names_dict else 0
-num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in nodes.tensor_frame.col_names_dict else 0
-config['num_node_features'] = num_numerical + num_categorical + num_timestamp + num_misc
+# num_misc = len(nodes.tensor_frame.col_names_dict[stype.relation]) if stype.relation in nodes.tensor_frame.col_names_dict else 0
+# num_numerical = len(nodes.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in nodes.tensor_frame.col_names_dict else 0
+# num_categorical = len(nodes.tensor_frame.col_names_dict[stype.categorical]) if stype.categorical in nodes.tensor_frame.col_names_dict else 0
+# num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype.timestamp in nodes.tensor_frame.col_names_dict else 0
+#config['num_node_features'] = num_numerical + num_categorical + num_timestamp + num_misc
+config['num_node_features'] = nodes.num_features
 logging.info(f"Number of node features: {config['num_node_features']}")
 
 if config['model'] == 'pna' or config['model'] == 'gin':
@@ -236,6 +288,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
 
 best_val_f1 = 0
 best_te_f1 = 0
+best_val_acc = 0
+best_te_acc = 0
 for epoch in range(config['epochs']):
     total_loss = total_examples = 0
     preds = []
@@ -244,7 +298,7 @@ for epoch in range(config['epochs']):
     for batch in tqdm(train_loader, disable=not args.tqdm):
 
         optimizer.zero_grad()
-        batch_size = len(batch.y)
+        batch_size = len(batch[1])
 
         node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
@@ -266,40 +320,47 @@ for epoch in range(config['epochs']):
             
     pred = torch.cat(preds, dim=0).detach().cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).detach().cpu().numpy()
+    logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
     if config['n_classes'] == 2:
         f1 = f1_score(ground_truth, pred)
     else:
-        f1 = f1_score(ground_truth, pred, average='weighted')
+        f1 = f1_score(ground_truth, pred, average='micro')
     acc = (pred == ground_truth).mean()
     wandb.log({"acc/train": acc}, step=epoch)
     wandb.log({"f1/train": f1}, step=epoch)
     wandb.log({"Loss": total_loss/total_examples}, step=epoch)
     logging.info(f'Train F1: {f1:.4f}, Epoch: {epoch}')
-    logging.info(f'Train Loss: {total_loss/total_examples:.4f}')
     logging.info(f'Train Acc: {acc:.4f}')
 
     # evaluate
-    val_f1 = evaluate(val_loader, dataset, model, device, args, 'val', config)
-    #val_f1 = 0
-    te_f1 = evaluate(test_loader, dataset, model, device, args, 'test', config)
-
-    wandb.log({"f1/validation": val_f1}, step=epoch)
-    wandb.log({"f1/test": te_f1}, step=epoch)
+    val_f1, val_acc = evaluate(val_loader, dataset, model, device, args, 'val', config)
+    #val_f1, val_acc = 0, 0
+    logging.info(f'Validation Acc: {val_acc:.4f}')
     logging.info(f'Validation F1: {val_f1:.4f}')
+    wandb.log({"acc/validation": val_acc}, step=epoch)
+    wandb.log({"f1/validation": val_f1}, step=epoch)
+
+    te_f1, te_acc = evaluate(test_loader, dataset, model, device, args, 'test', config)
+    wandb.log({"acc/test": te_acc}, step=epoch)
+    wandb.log({"f1/test": te_f1}, step=epoch)
+    logging.info(f'Test Acc: {te_acc:.4f}')
     logging.info(f'Test F1: {te_f1:.4f}')
 
-    if epoch == 0:
-        wandb.log({"best_test_f1": te_f1}, step=epoch)
-    elif val_f1 > best_val_f1:
-    #elif te_f1 > best_te_f1:
+    if val_f1 > best_val_f1:
+    #if te_f1 > best_te_f1:
         best_val_f1 = val_f1
         best_te_f1 = te_f1
         wandb.log({"best_test_f1": te_f1}, step=epoch)
         # if args.save_model:
         #     save_model(model, optimizer, epoch, config)
-    # logging.info(f'Best Validation F1: {best_val_f1:.4f}')
     logging.info(f'Best Test F1: {best_te_f1:.4f}')
 
+    if val_acc > best_val_acc:
+    #if te_acc > best_te_acc:
+        best_val_acc = val_acc
+        best_te_acc = te_acc
+        wandb.log({"best_test_acc": te_acc}, step=epoch)
+    logging.info(f'Best Acc: {best_te_acc:.4f}')
 
 
 

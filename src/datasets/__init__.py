@@ -6,6 +6,9 @@ from .elliptic_bitcoin import EllipticBitcoin, EllipticBitcoinNodes, EllipticBit
 from .ogbn_arxiv import OgbnArxiv, OgbnArxivNodes, OgbnArxivEdges
 from .musae_github import MusaeGitHub
 from .lastfm_asia import LastFMAsia
+from .wiki_squirrel import WikiSquirrel
+from .wiki_chameleon import WikiChameleon
+from .facebook import Facebook
 
 __all__ = [
     'IBMTransactionsAML',
@@ -21,5 +24,8 @@ __all__ = [
     'OgbnArxivNodes',
     'OgbnArxivEdges',
     'MusaeGitHub',
-    'LastFMAsia'
+    'LastFMAsia',
+    'WikiSquirrel',
+    'WikiChameleon',
+    'Facebook'
 ]
