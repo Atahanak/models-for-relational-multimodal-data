@@ -305,8 +305,10 @@ for epoch in range(config['epochs']):
     te_rmse, te_acc = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config, 'mcm')
 
 # freeze tabular layers
-for param in model.model.tabular_backbone.parameters():
-    param.requires_grad = False
+if args.freeze:
+    print("Freezing tabular layers")
+    for param in model.model.tabular_backbone.parameters():
+        param.requires_grad = False
 
 best_val_f1 = 0
 for epoch in range(config['epochs'], config['epochs']*2):

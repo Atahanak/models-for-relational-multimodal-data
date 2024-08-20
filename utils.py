@@ -54,6 +54,7 @@ def create_parser():
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
     parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
     parser.add_argument("--group", default="null", type=str, help="wandb group", required=False)
+    parser.add_argument("--freeze", action="store_true", help="freeze model parameters for tabular backbone", required=False)
 
     return parser
 
