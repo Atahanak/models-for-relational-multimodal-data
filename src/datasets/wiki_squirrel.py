@@ -42,7 +42,7 @@ class WikiSquirrel():
             self.ego = ego
 
             logger.info(f'Creating edges...')
-            self.edges = WikiSquirrelEdges(os.path.join(root, 'musae_squirrel_edges.csv'), ports=ports)
+            self.edges = WikiSquirrelEdges(os.path.join(root, 'musae_squirrel_edges.csv'), ports=ports, khop_neighbors=khop_neighbors)
             self.edges.materialize()
             self.edges.init_encoder(channels)
             logger.info(f'Edges created.')
@@ -50,6 +50,8 @@ class WikiSquirrel():
             self.nodes = WikiSquirrelNodes(os.path.join(root, 'musae_squirrel_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, ego=ego)
             logger.info(f'Nodes created.')
             self.emb = torch.nn.Embedding(self.nodes.max_cat+1, channels)
+            # cast emb to bfloat16
+            # self.emb.weight = torch.nn.Parameter(self.emb.weight.half())
             self.num_classes = self.nodes.df['target'].nunique()
             
             self.num_columns = [col for col in self.nodes.df.columns]
@@ -305,8 +307,7 @@ class WikiSquirrelNodes(torch.utils.data.Dataset):
             #self.df.reset_index(inplace=True)
 
             self.cat_columns = [col for col in self.df.columns if col != 'target' and col != 'id' and col != 'split']
-            print(self.cat_columns)
-            print(len(self.cat_columns))
+
             if df is None:
                 # add one to all cat_columns to avoid -1 indexing
                 for col in self.cat_columns:

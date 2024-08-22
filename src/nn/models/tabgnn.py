@@ -219,3 +219,4 @@ class FTTransformerLayer(Module):
 
     def forward(self, x_tab):
        return (x_tab + self.tab_norm(self.tab_conv(x_tab))) / 2
+

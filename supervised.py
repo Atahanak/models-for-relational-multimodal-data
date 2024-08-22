@@ -1,3 +1,4 @@
+import sys
 import logging
 import wandb
 from tqdm import tqdm as tqdm
@@ -12,6 +13,7 @@ from torch_frame.nn import (
 )
 import torch
 from torch_geometric.utils import degree
+logging.getLogger('torch').setLevel(logging.WARNING)
 
 from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, OgbnArxiv, MusaeGitHub, LastFMAsia, WikiSquirrel, WikiChameleon, Facebook
 from sklearn.metrics import f1_score
@@ -157,7 +159,7 @@ elif 'ogbn_arxiv' in config['data']:
     )
 elif 'git_web_ml' in config['data']:
     config['task'] = 'node_classification'
-    config['num_gnn_layers'] = 4
+    config['n_gnn_layers'] = 4
     dataset = MusaeGitHub(
         root=config['data'],
         split_type='random', 
@@ -167,10 +169,12 @@ elif 'git_web_ml' in config['data']:
         splits=[0.7, 0.15, 0.15],
         channels=config['n_hidden']
     )
+    config['emb'] = dataset.emb
 elif 'squirrel' in config['data']:
     config['task'] = 'node_classification'
-    config['n_hidden'] = 32
-    config['num_gnn_layers'] = 2
+    config['n_hidden'] = 64
+    config['n_gnn_layers'] = 4
+    print(args.num_neighs)
     dataset = WikiSquirrel(
         root=config['data'],
         split_type='random', 
@@ -279,12 +283,51 @@ elif config['model'] == 'fttransformer':
     model = TT(
                 config
             ).to(device)
+    #model = torch.compile(model)
 else:
     raise ValueError("Invalid model name!")
 
 #loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config['w_ce1'], config['w_ce2']]).to(device))
 loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor(config['loss_weights']).to(device))
-optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
+
+# cast model parameters to bflat16
+# model = model.half()
+# print number of parameters
+num_params = sum(p.numel() for p in model.parameters())
+logging.info(f"Number of parameters: {num_params}")
+# print number of emb parameters
+num_emb_params = sum(p.numel() for p in dataset.emb.parameters())
+logging.info(f"Number of emb parameters: {num_emb_params}")
+
+logging.info(f'Total number of parameters {num_params + num_emb_params}')
+def parameter_breakdown(model):
+    total_params = 0
+    print(f"{'Layer':<40} {'Shape':<30} {'Params':<15}")
+    print("-" * 90)
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        layer_params = param.numel()
+        total_params += layer_params
+        print(f"{name:<40} {str(list(param.shape)):<30} {layer_params:<15}")
+
+    print(f"\nTotal Trainable Parameters: {total_params:,}")
+
+parameter_breakdown(model)
+
+# pass mode and dataset.emb (type torch.Embedding) parameters to the optimizer
+# optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
+optimizer = torch.optim.Adam([
+    {'params': model.parameters()},
+    {'params': dataset.emb.parameters()}
+], lr=config['lr'])
+# import sys
+# sys.exit()
+
+from torch.profiler import profile, ProfilerActivity
+from torch.cuda.amp import autocast, GradScaler
+scaler = GradScaler()
 
 best_val_f1 = 0
 best_te_f1 = 0
@@ -301,19 +344,43 @@ for epoch in range(config['epochs']):
         batch_size = len(batch[1])
 
         node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
+        # print gpu memory allocation before and after the operation
+        #print(torch.cuda.memory_summary(device=device, abbreviated=False))
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
+        #print(torch.cuda.memory_summary(device=device, abbreviated=False))
+        #print shapes of all the tensors
+        # print(f"Node Feats: {node_feats.shape}")
+        # print(f"Edge Index: {edge_index.shape}")
+        # print(f"Edge Attr: {edge_attr.shape}")
+        # print(f"Y: {y.shape}")
 
+        # with autocast():
+        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, record_shapes=True) as prof:
         pred = model(node_feats, edge_index, edge_attr)[:batch_size]
+        #print(torch.cuda.memory_summary(device=device, abbreviated=False))
         if mask is not None:
             pred = pred[mask]
             y = y[mask]
 
         preds.append(pred.argmax(dim=-1))
         ground_truths.append(y)
-        loss = loss_fn(pred, y.view(-1).to(torch.long))
+        loss = loss_fn(pred.float(), y.view(-1).to(torch.long))
         
         loss.backward()
         optimizer.step()
+        #print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=5))
+        #sys.exit()
+        # display memory usage for each operation
+
+        # print(torch.cuda.memory_summary(device=device, abbreviated=False))
+        # # Scales the loss and performs backpropagation
+        # scaler.scale(loss).backward()
+        
+        # # Update model parameters
+        # scaler.step(optimizer)
+        
+        # # Update the scale for next iteration
+        # scaler.update()
 
         total_loss += loss.item() * pred.numel()
         total_examples += pred.numel()

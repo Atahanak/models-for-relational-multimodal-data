@@ -162,6 +162,7 @@ class TABGNNS(nn.Module):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
+        #self.emb = config['emb']
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
@@ -224,6 +225,7 @@ class TABGNNFusedS(nn.Module):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
+        
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
@@ -234,13 +236,15 @@ class TABGNNFusedS(nn.Module):
             self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
     
     def forward(self, x, edge_index, edge_attr):
-        x, edge_attr = self.model(x, edge_index, edge_attr)
+        edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+
+        x, edge_attr = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)
         if self.config['task'] == 'edge_classification':
-            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
-            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
             out = self.classifier(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
-            out = self.classifier(x[:, 0, :])
+            #out = self.classifier(x[:, 0, :])
+            out = self.classifier(x)
         elif self.config['task'] == 'node_classification-mcm_edge_table':
             out = self.classifier(x)
             x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
@@ -253,7 +257,8 @@ class TABGNNFusedS(nn.Module):
         
         n_feats = config['num_node_features']
         n_dim = n_feats*config['n_hidden'] 
-        e_dim = config['num_edge_features'] * config['n_hidden']
+        #e_dim = config['num_edge_features'] * config['n_hidden']
+        e_dim = config['num_edge_features']
 
         if config['model'] == "tabgnnfused":
             if config['in_degrees'] is None:

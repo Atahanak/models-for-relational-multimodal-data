@@ -50,6 +50,7 @@ class MusaeGitHub():
             self.nodes = MusaeGithubNodes(os.path.join(root, 'musae_git_nodes.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, ego=ego)
             logger.info(f'Nodes created.')
             self.emb = torch.nn.Embedding(self.nodes.max_cat+1, channels)
+            # self.emb.weight = torch.nn.Parameter(self.emb.weight.half())
             
             self.num_columns = [col for col in self.nodes.df.columns]
             self.cat_columns = []
