@@ -33,7 +33,7 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     train_edge_index = edge_index[:, train_mask]
     train_ids = ids[train_mask]
     self.train_graph = torch_geometric.data.Data(x=x, edge_index=train_edge_index, edge_attr=train_ids)
-    self.train_sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors)
+    self.train_sampler = NeighborSampler(self.train_graph, num_neighbors=self.khop_neighbors, disjoint=True)
 
     # Create val graph
     val_mask = val_mask = self.df['split'].isin([0, 1])

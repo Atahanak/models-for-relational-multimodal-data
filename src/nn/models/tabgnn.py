@@ -53,6 +53,102 @@ class TABGNN(Module):
                 f"num_layers must be a positive integer (got {num_layers})")
         self.encoder = encoder
         self.channels = channels
+        self.nhidden = self.channels
+        #self.nhidden = nhidden
+        self.edge_dim = edge_dim
+        
+        self.node_emb = Linear(node_dim, self.nhidden)
+        self.edge_emb = Linear(self.edge_dim, self.nhidden)
+
+        self.tabular_backbone = ModuleList()
+        self.gnn_backbone = ModuleList()
+        for i in range(num_layers):
+            #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
+            self.tabular_backbone.append(RCBAttentionLayer(channels, nhead))
+            self.gnn_backbone.append(PNALayer(channels, self.nhidden, deg, reverse_mp))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        #torch.nn.init.normal_(self.cls_embedding, std=0.01)
+        self.node_emb.reset_parameters()
+        self.edge_emb.reset_parameters()
+        for layer in self.tabular_backbone:
+            layer.reset_parameters()
+        for layer in self.gnn_backbone:
+            layer.reset_parameters()
+
+    def get_shared_params(self):
+        param_groups = [
+            self.encoder.parameters(),
+            #[self.cls_embedding],  # Wrap single parameters in a list
+            self.node_emb.parameters(),
+            self.edge_emb.parameters(),
+            self.tabular_backbone.parameters(),
+            self.gnn_backbone.parameters(),
+        ]
+        
+        # Flatten the param groups into a single list
+        flat_params = [param for group in param_groups for param in group]
+        
+        return flat_params
+
+    def zero_grad_shared_params(self):
+        for param in self.get_shared_params():
+            if param.grad is not None:
+                param.grad.data.zero_()
+
+    def forward(self, x, edge_index, edge_attr, mask) -> Tensor:
+        r"""Transforming :class:`TensorFrame` object into output prediction.
+
+        Args:
+            tf (TensorFrame):
+                Input :class:`TensorFrame` object.
+
+        Returns:
+            torch.Tensor: Output of shape [batch_size, out_channels].
+        """
+        x = self.node_emb(x)
+        t_edge_attr = edge_attr
+        for layer in self.tabular_backbone:
+            t_edge_attr = layer(t_edge_attr, mask)
+        
+        edge_attr = (edge_attr + t_edge_attr) / 2
+        edge_attr = edge_attr[mask]
+        edge_attr = edge_attr.view(-1, self.edge_dim)
+        edge_attr = self.edge_emb(edge_attr)
+
+        for layer in self.gnn_backbone:
+            x, edge_attr = layer(x, edge_index, edge_attr)
+
+        return x, edge_attr
+
+class TABGNN2(Module):
+    r"""
+    """
+    def __init__(
+        self,
+        # general parameters
+        channels: int,
+        num_layers: int,
+        encoder: Any,
+        # PNA parameters
+        deg=None,
+        node_dim: int = 1,
+        nhidden: int = 128,
+        edge_dim: int = None,
+        reverse_mp: bool = False,
+        # fttransformer parameters
+        feedforward_channels: Optional[int] = None,
+        nhead: int = 8,
+        dropout: float = 0.5,
+        activation: str = 'relu',
+    ) -> None:
+        super().__init__()
+        if num_layers <= 0:
+            raise ValueError(
+                f"num_layers must be a positive integer (got {num_layers})")
+        self.encoder = encoder
+        self.channels = channels
         self.nhidden = nhidden
         self.edge_dim = edge_dim + channels
 
@@ -64,7 +160,8 @@ class TABGNN(Module):
         self.tabular_backbone = ModuleList()
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
-            self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
+            #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
+            self.tabular_backbone.append(RCAttentionLayer(channels, nhead))
             self.gnn_backbone.append(PNALayer(channels, nhidden, deg, reverse_mp))
         self.reset_parameters()
 
@@ -116,14 +213,15 @@ class TABGNN(Module):
         x_cls = self.cls_embedding.repeat(N, 1, 1)
         edge_attr = torch.cat([x_cls, edge_attr], dim=1)
 
+        t_edge_attr = edge_attr
+        t_target_edge_attr = target_edge_attr
         for layer in self.tabular_backbone:
-            t_edge_attr = layer(edge_attr)
-            t_target_edge_attr = layer(target_edge_attr)
+            t_edge_attr = layer(t_edge_attr)
+            t_target_edge_attr = layer(t_target_edge_attr)
         
         edge_attr = (edge_attr + t_edge_attr) / 2
         target_edge_attr = (target_edge_attr + t_target_edge_attr) / 2
         
-
         target_edge_attr = target_edge_attr.view(-1, self.edge_dim)
         target_edge_attr = self.edge_emb(target_edge_attr)
 
@@ -145,16 +243,16 @@ class PNALayer(Module):
         aggregators = ['mean', 'max', 'min', 'std']
         scalers = ['identity', 'amplification', 'attenuation']
         if not self.reverse_mp:
-            self.gnn_conv = PNAConv(in_channels=nhidden, out_channels=nhidden,
+            self.gnn_conv = PNAConv(in_channels=self.nhidden, out_channels=self.nhidden,
                         aggregators=aggregators, scalers=scalers, deg=deg,
-                        edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
+                        edge_dim=self.nhidden, towers=1, pre_layers=1, post_layers=1,
                         divide_input=False)
         else:
-            self.gnn_conv = PNAConvHetero(n_hidden=nhidden, in_channels=nhidden, out_channels=nhidden,
+            self.gnn_conv = PNAConvHetero(n_hidden=self.nhidden, in_channels=self.nhidden, out_channels=self.nhidden,
                         aggregators=aggregators, scalers=scalers, deg=deg,
-                        edge_dim=nhidden, towers=1, pre_layers=1, post_layers=1,
+                        edge_dim=self.nhidden, towers=1, pre_layers=1, post_layers=1,
                         divide_input=False)
-        self.gnn_norm = BatchNorm(nhidden)
+        self.gnn_norm = BatchNorm(self.nhidden)
         self.gnn_edge_update = Sequential(
                 Linear(3 * self.nhidden, self.nhidden),
                 ReLU(),
@@ -175,6 +273,86 @@ class PNALayer(Module):
         edge_attr = edge_attr + self.gnn_edge_update(torch.cat([x_gnn[src], x_gnn[dst], edge_attr], dim=-1)) / 2
         return x_gnn, edge_attr
     
+class RCBAttentionLayer(Module):
+    def __init__(self, hidden_dim, num_heads):
+        super(RCBAttentionLayer, self).__init__()
+        self.row_transformer = TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+        self.row_norm = LayerNorm(hidden_dim)
+        self.col_transformer = TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+        self.col_norm = LayerNorm(hidden_dim)
+    
+    def reset_parameters(self):
+        for p in self.row_transformer.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
+        self.row_norm.reset_parameters()
+        for p in self.col_transformer.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
+        self.col_norm.reset_parameters()
+
+    def forward(self, x, mask):
+        # x: (batch_size, num_rows, num_cols, hidden_dim)
+        batch_size, num_rows, num_cols, hidden_dim = x.shape
+        col_mask = mask.unsqueeze(1).expand(batch_size, num_cols, num_rows).contiguous().view(batch_size * num_cols, num_rows).float()
+        #row_mask = mask.unsqueeze(2).expand(batch_size, num_rows, num_cols).contiguous().view(batch_size * num_rows, num_cols).float()
+
+        # Apply row-wise attention
+        row_input = x.view(batch_size * num_rows, num_cols, hidden_dim)
+        row_output = self.row_transformer(row_input)#, src_key_padding_mask=row_mask)  # (batch_size * num_rows, num_cols, hidden_dim)
+        row_output = row_output.view(batch_size, num_rows, num_cols, hidden_dim)
+
+        # Apply column-wise attention
+        col_input = x.permute(0, 2, 1, 3).contiguous()  # (batch_size, num_cols, num_rows, hidden_dim)
+        # # mask: (batch_size, num_rows)
+
+        col_input = col_input.view(batch_size * num_cols, num_rows, hidden_dim)
+        col_output = self.col_transformer(col_input, src_key_padding_mask=col_mask)  # (batch_size * num_cols, num_rows, hidden_dim)
+        #col_output = self.col_transformer(col_input)  # (batch_size * num_cols, num_rows, hidden_dim)
+        col_output = col_output.view(batch_size, num_cols, num_rows, hidden_dim)
+        col_output = col_output.permute(0, 2, 1, 3).contiguous()  # Back to (batch_size, num_rows, num_cols, hidden_dim)
+
+        # Combine row-wise and column-wise outputs (e.g., summation)
+        combined_output = (self.row_norm(row_output) + self.col_norm(col_output)) / 2
+        return combined_output
+
+class RCAttentionLayer(Module):
+    def __init__(self, hidden_dim, num_heads):
+        super(RCAttentionLayer, self).__init__()
+        self.row_transformer = TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+        self.row_norm = LayerNorm(hidden_dim)
+        self.col_transformer = TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+        self.col_norm = LayerNorm(hidden_dim)
+    
+    def reset_parameters(self):
+        for p in self.row_transformer.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
+        self.row_norm.reset_parameters()
+        for p in self.col_transformer.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
+        self.col_norm.reset_parameters()
+
+    def forward(self, x):
+        # x: (num_rows, num_cols, hidden_dim)
+        # Apply row-wise attention
+        row_input = x
+        row_output = self.row_transformer(row_input)
+
+        # Apply column-wise attention
+        col_input = x.permute(1, 0, 2).contiguous()  # (num_cols, num_rows, hidden_dim)
+        col_output = self.col_transformer(col_input)
+        col_output = col_output.permute(1, 0, 2).contiguous()  # Back to (num_rows, num_cols, hidden_dim)
+
+        # Combine row-wise and column-wise outputs (e.g., summation)
+        combined_output = (self.row_norm(row_output) + self.col_norm(col_output)) / 2
+        return combined_output
+
 class FTTransformerLayer(Module):
     def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128):
         super().__init__()

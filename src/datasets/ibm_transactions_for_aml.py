@@ -89,8 +89,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             self.df = pd.read_csv(root, names=names, dtype=dtypes, header=0)         
             col_to_stype = {
-                'From Bank': torch_frame.categorical,
-                'To Bank': torch_frame.categorical,
+                #'From Bank': torch_frame.categorical,
+                #'To Bank': torch_frame.categorical,
                 'Payment Currency': torch_frame.categorical,
                 'Receiving Currency': torch_frame.categorical,
                 'Payment Format': torch_frame.categorical,
@@ -100,6 +100,8 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
             }
             self.num_columns = ['Amount Paid']
             self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            self.masked_categorical_columns = self.cat_columns
+            self.masked_numerical_columns = self.num_columns
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
@@ -129,6 +131,66 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
 
             col_to_stype = set_target_col(self, pretrain, col_to_stype, "Is Laundering")
             super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
+        
+        def sample_neighbors_b(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
+            """k-hop sampling.
+            
+            If k-hop sampling, this method **guarantees** that the first 
+            ``n_seed_edges`` edges in the resulting table are the seed edges in the
+            same order as given by ``idx``.
+
+            Does not support multi-graphs
+
+            Parameters
+            ----------
+            idx : int | list[int] | array
+                Edge indices to use as seed for k-hop sampling.
+            num_neighbors: int | list[int] | array
+                Number of neighbors to sample for each seed edge.
+            Returns
+            -------
+            pd.DataFrame
+                Sampled edge data
+
+                data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
+                sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+            """
+            edges = torch.tensor(edges, dtype=torch.int)
+            row = edges[:, 0]
+            col = edges[:, 1]
+            idx = edges[:, 2] 
+            input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
+            
+            if mode == 'train':
+                out = self.train_sampler.sample_from_edges(input)
+                perm = self.train_sampler.edge_permutation 
+            elif mode == 'val':
+                out = self.val_sampler.sample_from_edges(input)
+                perm = self.val_sampler.edge_permutation 
+            elif mode =='test':
+                out = self.test_sampler.sample_from_edges(input)
+                perm = self.test_sampler.edge_permutation 
+            else:
+                raise ValueError("Invalid sampling mode! Valid values: ['train', 'val', 'test']")
+
+            batch = out.batch
+            e_batch = torch.tensor([batch[src] for src in out.row])
+            e_id = perm[out.edge] if perm is not None else out.edge
+
+            is_new_edge = ~torch.isin(e_id, idx)
+            new_edges = e_id[is_new_edge]
+            batch = e_batch[is_new_edge]
+            print(new_edges.shape)
+            print(batch.shape)
+
+            if len(new_edges) > 0:
+                row = torch.cat([row, self.edges[new_edges, 0]])
+                col = torch.cat([col, self.edges[new_edges, 1]])
+                idx = torch.cat([idx, new_edges])
+                batch = torch.cat([torch.arange(len(edges)), batch])
+            print(idx.shape)
+            print(batch.shape)
+            return row, col, idx, batch
 
         def sample_neighbors(self, edges, mode="train") -> (torch.Tensor, torch.Tensor): # type: ignore
             """k-hop sampling.
@@ -170,7 +232,7 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 perm = self.test_sampler.edge_permutation 
             else:
                 raise ValueError("Invalid sampling mode! Valid values: ['train', 'val', 'test']")
-
+            
             e_id = perm[out.edge] if perm is not None else out.edge
 
             is_new_edge = ~torch.isin(e_id, idx)

@@ -12,6 +12,7 @@ from torch_frame import stype
 from torch_frame.data.stats import StatType
 
 from torch_geometric.utils import degree
+from torch_geometric.utils import to_dense_batch
 
 from src.datasets import IBMTransactionsAML
 from src.datasets import EthereumPhishingTransactions
@@ -22,7 +23,7 @@ from src.nn.gnn.decoder import LinkPredHead
 from src.utils.loss import SSLoss
 from src.utils.metric import SSMetric
 from src.nn.weighting.MoCo import MoCoLoss
-from src.utils.batch_processing import mcm_inputs, lp_inputs
+from src.utils.batch_processing import mcm_inputs, lp_inputs, mcm_inputs_b
 
 
 from tqdm.auto import tqdm
@@ -49,10 +50,110 @@ torch.backends.cuda.enable_math_sdp(True)
 
 torch.set_float32_matmul_precision('high')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#device = 'cpu'
 
 num_numerical = num_categorical = 0
 ssloss = ssmetric = None
 args = None
+
+def train_mcm_b(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
+    model.train()
+    loss_accum = total_count = 0
+    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
+
+    with tqdm(loader, desc=f'Epoch {epoch}') as t:
+        for tf in t:
+            node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, 'train', args["ego"])
+            node_feats = node_feats.to(device)
+            edge_index = edge_index.to(device)
+            edge_attr = edge_attr.to(device)            
+            batch = batch.to(device)
+            # print(batch)
+            
+            edge_attr, _ = encoder(edge_attr)
+            edge_attr, mask = to_dense_batch(edge_attr, batch)
+            # print(mask.shape)
+            # print(edge_attr.shape)
+
+            x, edge_attr = model(node_feats, edge_index, edge_attr, mask)
+            target_edge_index = edge_index[:, target_idx]
+            target_edge_attr = edge_attr[target_idx]
+            x_target = x[target_edge_index.T].reshape(-1, 2 * args["channels"])
+            x_target = torch.cat((x_target, target_edge_attr), 1)
+            num_pred, cat_pred = mcm_decoder(x_target)
+            num_pred = num_pred.cpu()
+            cat_pred = [x.cpu() for x in cat_pred]
+
+            optimizer.zero_grad()
+            t_loss, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+            t_loss.backward()
+            optimizer.step()
+
+            loss_accum += (t_loss.item() * len(tf.y))
+            total_count += len(tf.y)
+            t_c += loss_c[1]
+            t_n += loss_n[1]
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
+            t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
+        wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n}, step=epoch)
+    return {'loss': loss_accum / total_count}
+
+@torch.no_grad()
+def eval_mcm_b(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
+    encoder.eval()
+    model.eval()
+    mcm_decoder.eval()
+    total_count = 0
+    accum_acc = accum_l2 = 0
+    loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
+    with tqdm(loader, desc=f'Evaluating') as t:
+        for tf in t:
+            node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, 'train', args["ego"])
+            node_feats = node_feats.to(device)
+            edge_index = edge_index.to(device)
+            edge_attr = edge_attr.to(device)            
+            batch = batch.to(device)
+            
+            edge_attr, _ = encoder(edge_attr)
+            edge_attr, mask = to_dense_batch(edge_attr, batch)
+
+            x, edge_attr = model(node_feats, edge_index, edge_attr, mask)
+            target_edge_index = edge_index[:, target_idx]
+            target_edge_attr = edge_attr[target_idx]
+            x_target = x[target_edge_index.T].reshape(-1, 2 * args["channels"])
+            x_target = torch.cat((x_target, target_edge_attr), 1)
+            num_pred, cat_pred = mcm_decoder(x_target)
+            num_pred = num_pred.cpu()
+            cat_pred = [x.cpu() for x in cat_pred]
+            _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+            t_c += loss_c[1]
+            t_n += loss_n[1] 
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
+            total_count += len(num_pred)
+            for i, ans in enumerate(tf.y):
+                if ans[1] > (num_numerical-1):
+                    accum_acc += (cat_pred[int(ans[1])-num_numerical][i].argmax() == int(ans[0]))
+                else:
+                    accum_l2 += torch.square(ans[0] - num_pred[i][int(ans[1])]) #rmse
+            t.set_postfix(
+                accuracy=f'{accum_acc / t_c:.4f}',
+                rmse=f'{torch.sqrt(accum_l2 / t_n):.4f}', 
+                loss_mcm=f'{(loss_c_accum/t_c) + (loss_n_accum/t_n):.4f}',
+                loss_c = f'{loss_c_accum/t_c:.4f}', 
+                loss_n = f'{loss_n_accum/t_n:.4f}',
+            )
+        accuracy = accum_acc / t_c
+        rmse = torch.sqrt(accum_l2 / t_n)
+        wandb.log({
+            f"{dataset_name}_loss_mcm": (loss_c_accum/t_c) + (loss_n_accum/t_n),
+            f"{dataset_name}_loss_c": loss_c_accum/t_c,
+            f"{dataset_name}_loss_n": loss_n_accum/t_n,
+            f"{dataset_name}_accuracy": accuracy,
+            f"{dataset_name}_rmse": rmse,
+        }, step=epoch)
+        return {"accuracy": accuracy, "rmse": rmse}
 
 def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
@@ -70,6 +171,10 @@ def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimize
             
             edge_attr, _ = encoder(edge_attr)
             target_edge_attr, _ = encoder(target_edge_attr)
+            if node_feats.shape[0] == 1:
+                print(node_feats.shape, edge_index.shape, edge_attr.shape, target_edge_index.shape, target_edge_attr.shape)
+                continue
+            
             x, edge_attr, target_edge_attr = model(node_feats, edge_index, edge_attr, target_edge_attr)
             x_target = x[target_edge_index.T].reshape(-1, 2 * args["channels"])#.relu()
             x_target = torch.cat((x_target, target_edge_attr), 1)
@@ -741,11 +846,11 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
             logger.info(f"test_mcm: {test_mcm}")
             logger.info(f"test_lp: {test_lp}")
         elif mode == "mcm":
-            mcm_loss = train_mcm(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
+            mcm_loss = train_mcm_b(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
             logger.info(f"loss_mcm: {mcm_loss}")
-            val_mcm = eval_mcm(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
+            val_mcm = eval_mcm_b(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
             logger.info(f"val_mcm: {val_mcm}")
-            test_mcm = eval_mcm(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
+            test_mcm = eval_mcm_b(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
             logger.info(f"test_mcm: {test_mcm}")
         elif mode == "lp":
             lp_loss = train_lp(dataset, train_loader, epoch, encoder, model, lp_decoder, optimizer, scheduler)
