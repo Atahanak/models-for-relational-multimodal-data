@@ -56,7 +56,7 @@ args = None
 def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
-    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
+    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = 1e-12
 
     with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
@@ -85,13 +85,16 @@ def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimize
 
             loss_accum += (t_loss.item() * len(tf.y))
             total_count += len(tf.y)
+            acc += loss_c[2]
             t_c += loss_c[1]
             t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
         wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n}, step=epoch)
-    return {'loss': loss_accum / total_count}
+        wandb.log({"train_accuracy": acc / t_c}, step=epoch)
+        wandb.log({"train_rmse": loss_n_accum / t_n}, step=epoch)
+    return {'loss': loss_accum / total_count, 'accuracy': acc / t_c, 'rmse': loss_n_accum / t_n}
 
 def train_lp(dataset, loader, epoch: int, encoder, model, lp_decoder, optimizer, scheduler) -> float:
     encoder.train()
@@ -659,13 +662,15 @@ def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: li
     logger.info(f"encoder_params: {encoder_params}")
     logger.info(f"model_params: {model_params}")
     logger.info(f"learnable_params: {learnable_params}")
+    # import sys
+    # sys.exit()
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
     wandb.log({"learnable_params": learnable_params}, step=0)
     return optimizer
 
 def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name", save_dir="/path/to/save/",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
-         data_split=[0.6, 0.2, 0.2], dropout=0.5, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
+         data_split=[0.6, 0.2, 0.2], dropout=0.1, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
          compile=False, testing=True, wandb_dir="/path/to/wandb", group="", mode="lp", moo="sum",
          ego=False, ports=False, reverse_mp=False):
     if mode != "lp":

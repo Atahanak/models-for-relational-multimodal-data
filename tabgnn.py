@@ -59,11 +59,11 @@ args = None
 def train_mcm_b(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
-    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
+    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = 1e-12
 
     with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, 'train', args["ego"])
+            node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)            
@@ -91,13 +91,16 @@ def train_mcm_b(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimi
 
             loss_accum += (t_loss.item() * len(tf.y))
             total_count += len(tf.y)
+            acc += loss_c[2]
             t_c += loss_c[1]
             t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
         wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n}, step=epoch)
-    return {'loss': loss_accum / total_count}
+        wandb.log({"train_accuracy": acc / t_c}, step=epoch)
+        wandb.log({"train_rmse": loss_n_accum / t_n}, step=epoch)
+    return {'loss': loss_accum / total_count, "accuracy": acc / t_c, "rmse": loss_n_accum / t_n}
 
 @torch.no_grad()
 def eval_mcm_b(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, dataset_name) -> float:
@@ -109,7 +112,7 @@ def eval_mcm_b(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, 
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
     with tqdm(loader, desc=f'Evaluating') as t:
         for tf in t:
-            node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, 'train', args["ego"])
+            node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
             edge_index = edge_index.to(device)
             edge_attr = edge_attr.to(device)            
@@ -127,6 +130,7 @@ def eval_mcm_b(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, 
             num_pred = num_pred.cpu()
             cat_pred = [x.cpu() for x in cat_pred]
             _, loss_c, loss_n = ssloss.mcm_loss(cat_pred, num_pred, tf.y)
+
             t_c += loss_c[1]
             t_n += loss_n[1] 
             loss_c_accum += loss_c[0].item()
@@ -158,7 +162,7 @@ def eval_mcm_b(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, 
 def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimizer, scheduler) -> float:
     model.train()
     loss_accum = total_count = 0
-    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
+    loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = 1e-12
 
     with tqdm(loader, desc=f'Epoch {epoch}') as t:
         for tf in t:
@@ -189,13 +193,16 @@ def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimize
 
             loss_accum += (t_loss.item() * len(tf.y))
             total_count += len(tf.y)
+            acc += loss_c[2]
             t_c += loss_c[1]
             t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
             loss_n_accum += loss_n[0].item()
             t.set_postfix(loss=f'{loss_accum/total_count:.4f}', loss_c=f'{loss_c_accum/t_c:.4f}', loss_n=f'{loss_n_accum/t_n:.4f}')
         wandb.log({"train_loss": loss_accum/total_count, "train_loss_c": loss_c_accum/t_c, "train_loss_n": loss_n_accum/t_n}, step=epoch)
-    return {'loss': loss_accum / total_count}
+        wandb.log({"train_accuracy": acc / t_c}, step=epoch)
+        wandb.log({"train_rmse": loss_n_accum / t_n}, step=epoch)
+    return {'loss': loss_accum / total_count, "accuracy": acc / t_c, "rmse": loss_n_accum / t_n}
 
 def train_lp(dataset, loader, epoch: int, encoder, model, lp_decoder, optimizer, scheduler) -> float:
     encoder.train()
@@ -732,6 +739,12 @@ def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: li
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
     ]
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # print transformer params
+    transformer_params = sum(p.numel() for p in model.tabular_backbone.parameters() if p.requires_grad)
+    gnn_params = sum(p.numel() for p in model.gnn_backbone.parameters() if p.requires_grad)
+    print(len(model.tabular_backbone))
+    print(f"transformer_params: {transformer_params}")
+    print(f"gnn_params: {gnn_params}")
     encoder_params = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
     learnable_params = model_params + encoder_params
     for name, decoder in decoders:
@@ -744,13 +757,15 @@ def get_optimizer(encoder: torch.nn.Module, model: torch.nn.Module, decoders: li
     logger.info(f"encoder_params: {encoder_params}")
     logger.info(f"model_params: {model_params}")
     logger.info(f"learnable_params: {learnable_params}")
+    # import sys
+    # sys.exit()
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=lr, eps=eps)
     wandb.log({"learnable_params": learnable_params}, step=0)
     return optimizer
 
 def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name", save_dir="/path/to/save/",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
-         data_split=[0.6, 0.2, 0.2], dropout=0.5, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
+         data_split=[0.6, 0.2, 0.2], dropout=0.1, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
          compile=False, testing=True, wandb_dir="/path/to/wandb", group="", mode="mcm-lp", moo="sum",
          ego=False, ports=False, reverse_mp=False):
     global args
@@ -846,12 +861,18 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
             logger.info(f"test_mcm: {test_mcm}")
             logger.info(f"test_lp: {test_lp}")
         elif mode == "mcm":
-            mcm_loss = train_mcm_b(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
+            mcm_loss = train_mcm(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
             logger.info(f"loss_mcm: {mcm_loss}")
-            val_mcm = eval_mcm_b(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
+            val_mcm = eval_mcm(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
             logger.info(f"val_mcm: {val_mcm}")
-            test_mcm = eval_mcm_b(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
+            test_mcm = eval_mcm(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
             logger.info(f"test_mcm: {test_mcm}")
+            # mcm_loss = train_mcm_b(dataset, train_loader, epoch, encoder, model, mcm_decoder, optimizer, scheduler)
+            # logger.info(f"loss_mcm: {mcm_loss}")
+            # val_mcm = eval_mcm_b(epoch, dataset, val_loader, encoder, model, mcm_decoder, "val")
+            # logger.info(f"val_mcm: {val_mcm}")
+            # test_mcm = eval_mcm_b(epoch, dataset, test_loader, encoder, model, mcm_decoder, "test")
+            # logger.info(f"test_mcm: {test_mcm}")
         elif mode == "lp":
             lp_loss = train_lp(dataset, train_loader, epoch, encoder, model, lp_decoder, optimizer, scheduler)
             logger.info(f"loss_lp: {lp_loss}")

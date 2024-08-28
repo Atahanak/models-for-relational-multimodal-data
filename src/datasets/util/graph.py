@@ -41,14 +41,14 @@ def create_graph(self, col_to_stype, src_column, dst_column):
     val_edge_index = edge_index[:, val_mask]
     val_ids = ids[val_mask]
     self.val_graph = torch_geometric.data.Data(x=x, edge_index=val_edge_index, edge_attr=val_ids)
-    self.val_sampler = NeighborSampler(self.val_graph, num_neighbors=self.khop_neighbors)
+    self.val_sampler = NeighborSampler(self.val_graph, num_neighbors=self.khop_neighbors, disjoint=True)
 
     # Create test graph
     test_edge_index = edge_index
     test_ids = ids
     timestamps = torch.tensor(self.df[self.timestamp_col].values, dtype=torch.long)
     self.test_graph = torch_geometric.data.Data(x=x, edge_index=test_edge_index, edge_attr=test_ids, timestamps=timestamps)
-    self.test_sampler = NeighborSampler(self.test_graph, num_neighbors=self.khop_neighbors)
+    self.test_sampler = NeighborSampler(self.test_graph, num_neighbors=self.khop_neighbors, disjoint=True)
 
     # Update col_to_stype
     col_to_stype['link'] = torch_frame.relation

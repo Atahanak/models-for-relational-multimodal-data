@@ -26,7 +26,7 @@ from ..gnn.model import PNAConvHetero
 import logging
 logger = logging.getLogger(__name__)
 
-class TABGNN(Module):
+class TABGNN2(Module):
     r"""
     """
     def __init__(
@@ -56,6 +56,7 @@ class TABGNN(Module):
         self.nhidden = self.channels
         #self.nhidden = nhidden
         self.edge_dim = edge_dim
+        self.ff_dim = feedforward_channels if feedforward_channels is not None else 4*channels
         
         self.node_emb = Linear(node_dim, self.nhidden)
         self.edge_emb = Linear(self.edge_dim, self.nhidden)
@@ -64,7 +65,7 @@ class TABGNN(Module):
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
             #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
-            self.tabular_backbone.append(RCBAttentionLayer(channels, nhead))
+            self.tabular_backbone.append(RCBAttentionLayer(channels, nhead, self.ff_dim, dropout, activation))
             self.gnn_backbone.append(PNALayer(channels, self.nhidden, deg, reverse_mp))
         self.reset_parameters()
 
@@ -122,7 +123,7 @@ class TABGNN(Module):
 
         return x, edge_attr
 
-class TABGNN2(Module):
+class TABGNN(Module):
     r"""
     """
     def __init__(
@@ -149,20 +150,23 @@ class TABGNN2(Module):
                 f"num_layers must be a positive integer (got {num_layers})")
         self.encoder = encoder
         self.channels = channels
-        self.nhidden = nhidden
+        # self.nhidden = nhidden
+        self.nhidden = channels
         self.edge_dim = edge_dim + channels
+        self.ff_dim = feedforward_channels if feedforward_channels is not None else 4*channels
 
         self.cls_embedding = Parameter(torch.empty(channels))
         
-        self.node_emb = Linear(node_dim, nhidden)
-        self.edge_emb = Linear(self.edge_dim, nhidden)
+        self.node_emb = Linear(node_dim, self.nhidden)
+        self.edge_emb = Linear(self.edge_dim, self.nhidden)
 
         self.tabular_backbone = ModuleList()
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
-            #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, feedforward_channels, dropout, activation, nhidden))
-            self.tabular_backbone.append(RCAttentionLayer(channels, nhead))
-            self.gnn_backbone.append(PNALayer(channels, nhidden, deg, reverse_mp))
+            #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, self.ff_dim, dropout, activation, self.nhidden))
+            self.tabular_backbone.append(FTTransformerLayer(channels, nhead, self.ff_dim, dropout, activation, self.nhidden))
+            #self.tabular_backbone.append(RCAttentionLayer(channels, nhead))
+            self.gnn_backbone.append(PNALayer(channels, self.nhidden, deg, reverse_mp))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -274,13 +278,13 @@ class PNALayer(Module):
         return x_gnn, edge_attr
     
 class RCBAttentionLayer(Module):
-    def __init__(self, hidden_dim, num_heads):
+    def __init__(self, hidden_dim, num_heads, ff_dim, dropout=0.1, activation='relu'):
         super(RCBAttentionLayer, self).__init__()
         self.row_transformer = TransformerEncoderLayer(
-            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+            d_model=hidden_dim, nhead=num_heads, dim_feedforward=ff_dim, dropout=dropout, activation=activation,  batch_first=True)
         self.row_norm = LayerNorm(hidden_dim)
         self.col_transformer = TransformerEncoderLayer(
-            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+            d_model=hidden_dim, nhead=num_heads, dim_feedforward=ff_dim, dropout=dropout, activation=activation,  batch_first=True)
         self.col_norm = LayerNorm(hidden_dim)
     
     def reset_parameters(self):
@@ -297,35 +301,40 @@ class RCBAttentionLayer(Module):
         # x: (batch_size, num_rows, num_cols, hidden_dim)
         batch_size, num_rows, num_cols, hidden_dim = x.shape
         col_mask = mask.unsqueeze(1).expand(batch_size, num_cols, num_rows).contiguous().view(batch_size * num_cols, num_rows).float()
+        # convert 1 to 0 and 0 to -inf
+        col_mask = (1 - col_mask) * -1e9
         #row_mask = mask.unsqueeze(2).expand(batch_size, num_rows, num_cols).contiguous().view(batch_size * num_rows, num_cols).float()
 
         # Apply row-wise attention
         row_input = x.view(batch_size * num_rows, num_cols, hidden_dim)
-        row_output = self.row_transformer(row_input)#, src_key_padding_mask=row_mask)  # (batch_size * num_rows, num_cols, hidden_dim)
+        # print(row_input)
+        row_output = self.row_transformer(row_input) #, src_key_padding_mask=row_mask)  # (batch_size * num_rows, num_cols, hidden_dim)
         row_output = row_output.view(batch_size, num_rows, num_cols, hidden_dim)
+        # print(row_output)
 
         # Apply column-wise attention
         col_input = x.permute(0, 2, 1, 3).contiguous()  # (batch_size, num_cols, num_rows, hidden_dim)
         # # mask: (batch_size, num_rows)
-
         col_input = col_input.view(batch_size * num_cols, num_rows, hidden_dim)
         col_output = self.col_transformer(col_input, src_key_padding_mask=col_mask)  # (batch_size * num_cols, num_rows, hidden_dim)
         #col_output = self.col_transformer(col_input)  # (batch_size * num_cols, num_rows, hidden_dim)
         col_output = col_output.view(batch_size, num_cols, num_rows, hidden_dim)
         col_output = col_output.permute(0, 2, 1, 3).contiguous()  # Back to (batch_size, num_rows, num_cols, hidden_dim)
-
+        # print(col_output)
+        # import sys
+        # sys.exit()
         # Combine row-wise and column-wise outputs (e.g., summation)
         combined_output = (self.row_norm(row_output) + self.col_norm(col_output)) / 2
         return combined_output
 
 class RCAttentionLayer(Module):
-    def __init__(self, hidden_dim, num_heads):
+    def __init__(self, hidden_dim, num_heads, ff_dim, dropout=0.1, activation='relu'):
         super(RCAttentionLayer, self).__init__()
         self.row_transformer = TransformerEncoderLayer(
-            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+            d_model=hidden_dim, nhead=num_heads, dim_feedforward=ff_dim, dropout=dropout, activation=activation, batch_first=True)
         self.row_norm = LayerNorm(hidden_dim)
         self.col_transformer = TransformerEncoderLayer(
-            d_model=hidden_dim, nhead=num_heads, batch_first=True)
+            d_model=hidden_dim, nhead=num_heads, dim_feedforward=ff_dim, dropout=dropout, activation=activation, batch_first=True)
         self.col_norm = LayerNorm(hidden_dim)
     
     def reset_parameters(self):
@@ -354,7 +363,7 @@ class RCAttentionLayer(Module):
         return combined_output
 
 class FTTransformerLayer(Module):
-    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.5, activation: str = 'relu', nhidden: int = 128):
+    def __init__(self, channels: int, nhead: int, feedforward_channels: Optional[int] = None, dropout: float = 0.1, activation: str = 'relu', nhidden: int = 128):
         super().__init__()
         self.channels = channels
         self.nhidden = nhidden
@@ -362,7 +371,7 @@ class FTTransformerLayer(Module):
         self.tab_conv = TransformerEncoderLayer(
             d_model=channels,
             nhead=nhead,
-            dim_feedforward=feedforward_channels or channels,
+            dim_feedforward=feedforward_channels,
             dropout=dropout,
             activation=activation,
             # Input and output tensors are provided as
