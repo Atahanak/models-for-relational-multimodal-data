@@ -164,7 +164,7 @@ class TABGNN(Module):
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
             #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, self.ff_dim, dropout, activation, self.nhidden))
-            self.tabular_backbone.append(FTTransformerLayer(channels, nhead, self.ff_dim, dropout, activation, self.nhidden))
+            self.tabular_backbone.append(RCAttentionLayer(channels, nhead, self.ff_dim, dropout, activation))
             #self.tabular_backbone.append(RCAttentionLayer(channels, nhead))
             self.gnn_backbone.append(PNALayer(channels, self.nhidden, deg, reverse_mp))
         self.reset_parameters()

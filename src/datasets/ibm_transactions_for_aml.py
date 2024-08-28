@@ -155,11 +155,11 @@ class IBMTransactionsAML(torch_frame.data.Dataset):
                 data/src/datasets/ibm_transactions_for_aml.py:123: UserWarning: To copy construct from a tensor, it is recommended to use 
                 sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
             """
-            edges = torch.tensor(edges, dtype=torch.int)
+            edges = edges.to(dtype=torch.int)
             row = edges[:, 0]
             col = edges[:, 1]
             idx = edges[:, 2] 
-            input = EdgeSamplerInput(None, torch.tensor(row, dtype=torch.long), torch.tensor(col, dtype=torch.long))
+            input = EdgeSamplerInput(None, row.to(dtype=torch.long), col.to(dtype=torch.long))
             
             if mode == 'train':
                 out = self.train_sampler.sample_from_edges(input)

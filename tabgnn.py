@@ -61,7 +61,7 @@ def train_mcm_b(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimi
     loss_accum = total_count = 0
     loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = 1e-12
 
-    with tqdm(loader, desc=f'Epoch {epoch}') as t:
+    with tqdm(loader, desc=f'Epoch {epoch}', disable=not args['tqdm']) as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
@@ -110,7 +110,7 @@ def eval_mcm_b(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, 
     total_count = 0
     accum_acc = accum_l2 = 0
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
-    with tqdm(loader, desc=f'Evaluating') as t:
+    with tqdm(loader, desc=f'Evaluating', disable=not args['tqdm']) as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_idx, batch = mcm_inputs_b(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
@@ -164,7 +164,7 @@ def train_mcm(dataset, loader, epoch: int, encoder, model, mcm_decoder, optimize
     loss_accum = total_count = 0
     loss_accum = loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = 1e-12
 
-    with tqdm(loader, desc=f'Epoch {epoch}') as t:
+    with tqdm(loader, desc=f'Epoch {epoch}', disable=not args['tqdm']) as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, 'train', args["ego"])
             node_feats = node_feats.to(device)
@@ -249,7 +249,7 @@ def eval_mcm(epoch, dataset, loader: DataLoader, encoder, model, mcm_decoder, da
     total_count = 0
     accum_acc = accum_l2 = 0
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = 1e-12
-    with tqdm(loader, desc=f'Evaluating') as t:
+    with tqdm(loader, desc=f'Evaluating', disable=not args['tqdm']) as t:
         for tf in t:
             node_feats, edge_index, edge_attr, target_edge_index, target_edge_attr = mcm_inputs(tf, dataset, "train", args["ego"])
             node_feats = node_feats.to(device)
@@ -767,7 +767,7 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
          seed=42, batch_size=200, channels=128, num_layers=3, lr=2e-4, eps=1e-8, weight_decay=1e-3, epochs=10,
          data_split=[0.6, 0.2, 0.2], dropout=0.1, split_type="temporal_daily", pretrain=["mask", "lp"], khop_neighbors=[100, 100], num_neg_samples=64,
          compile=False, testing=True, wandb_dir="/path/to/wandb", group="", mode="mcm-lp", moo="sum",
-         ego=False, ports=False, reverse_mp=False):
+         ego=False, ports=False, reverse_mp=False, tqdm=False):
     global args
     args = {
         'testing': testing,
@@ -791,7 +791,8 @@ def main(checkpoint="", dataset="/path/to/your/file", run_name="/your/run/name",
         'moo': moo,
         'ego': ego,
         'ports': ports,
-        'reverse_mp': reverse_mp
+        'reverse_mp': reverse_mp,
+        'tqdm': tqdm
     }
     logger.info(f"args: {args}")
 
