@@ -26,7 +26,7 @@ from ..gnn.model import PNAConvHetero
 import logging
 logger = logging.getLogger(__name__)
 
-class TABGNN2(Module):
+class TABGNN(Module):
     r"""
     """
     def __init__(
@@ -123,7 +123,7 @@ class TABGNN2(Module):
 
         return x, edge_attr
 
-class TABGNN(Module):
+class TABGNN2(Module):
     r"""
     """
     def __init__(
