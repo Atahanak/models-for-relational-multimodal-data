@@ -157,7 +157,7 @@ class IBMTransactionsAML():
     
         def get_graph_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
 
-            y, edges = batch.y[:, 0], batch.y[:,-3:]
+            y, edges = batch.y[:, :-3], batch.y[:,-3:]
             khop_source, khop_destination, idx = self.sample_neighbors(edges, mode)
             edge_attr = self.edges.tensor_frame.__getitem__(idx)
             edge_attr, _ = self.edges.encoder(edge_attr)
@@ -247,6 +247,8 @@ class IBMTransactionsAMLTransactions(torch_frame.data.Dataset):
             }
             self.num_columns = ['Amount Paid']
             self.cat_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
+            self.masked_numerical_columns = ['Amount Paid']
+            self.masked_categorical_columns = ['Receiving Currency', 'Payment Currency', 'Payment Format']
 
             # Split into train, validation, test sets
             self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
@@ -300,6 +302,8 @@ class IBMTransactionsAMLNodes(torch_frame.data.Dataset):
         col_to_stype = {
             'node_attr': stype.numerical,
         }
+        self.masked_numerical_columns = []
+        self.masked_categorical_columns = []
         if ego:
             self.df['ego'] = 1
             col_to_stype['ego'] = stype.numerical

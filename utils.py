@@ -52,9 +52,13 @@ def create_parser():
     parser.add_argument("--output_path", default="/mnt/data/outputs/", type=str, help="Output path to save the best models", required=False)
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
+    parser.add_argument("--load_model", default=None, type=str, help="Load model.")
     parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
     parser.add_argument("--group", default="null", type=str, help="wandb group", required=False)
     parser.add_argument("--freeze", action="store_true", help="freeze model parameters for tabular backbone", required=False)
+    parser.add_argument("--n_hidden", default=32, type=int, help="Number of hidden units in the GNN model", required=False)
+    parser.add_argument("--n_gnn_layers", default=2, type=int, help="Number of GNN layers in the model", required=False)
+    parser.add_argument("--task", default="edge_classification", type=str, help="Task to be performed by the model", required=False)
 
     return parser
 
@@ -163,6 +167,7 @@ class TABGNNS(nn.Module):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
+
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
@@ -171,6 +176,9 @@ class TABGNNS(nn.Module):
         elif config['task'] == 'node_classification-mcm_edge_table':
             self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
             self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+        elif config['task'] == 'mcm_edge_table':
+            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
+
     
     def forward(self, x, edge_index, edge_attr):
 
@@ -189,6 +197,12 @@ class TABGNNS(nn.Module):
             x_target = torch.cat((x_target, edge_attr), 1)
             out2 = self.mcm(x_target)
             return {"supervised": out, "mcm": out2}
+        elif self.config['task'] == 'mcm_edge_table':
+            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+            x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+            x_target = torch.cat((x_target, target_edge_attr), 1)
+            out = self.mcm(x_target)
         return out
 
     def get_model(self, config):
@@ -214,6 +228,9 @@ class TABGNNS(nn.Module):
                 edge_dim=e_dim, 
                 deg=in_degree_histogram,
                 reverse_mp=config['reverse_mp'])
+            if config['load_model'] is not None:
+                logging.info(f"Loading model from {config['load_model']}")
+                model.load_state_dict(torch.load(config['load_model'] + 'model'))
         else:
             raise ValueError("Invalid model name!")
         

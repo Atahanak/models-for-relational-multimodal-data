@@ -1,4 +1,5 @@
 import logging
+import os
 import wandb
 from tqdm import tqdm as tqdm
 
@@ -25,7 +26,9 @@ torch.backends.cuda.enable_mem_efficient_sdp(False)
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_math_sdp(True)
 
-def train(epoch, loader, dataset, model, device, args, mode, config, x):
+torch.multiprocessing.set_sharing_strategy('file_system')
+
+def train(epoch, loader, dataset, model, device, args, mode, config):
 
     total_loss = total_examples = 0
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = 1e-12
@@ -36,43 +39,40 @@ def train(epoch, loader, dataset, model, device, args, mode, config, x):
     for batch in tqdm(train_loader, disable=not args.tqdm):
 
         optimizer.zero_grad()
-        batch_size = len(batch.y)
 
-        node_feats, edge_index, edge_attr, y, y_mcm, mask = dataset.get_mcm_inputs(batch, mode='train', args=args)
-        node_feats, edge_index, edge_attr, y, y_mcm = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device), y_mcm.to(device)
+        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
+        node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
+        batch_size = y.size(0)
 
         pred = model(node_feats, edge_index, edge_attr)
-        pred, mcm_pred = pred['supervised'][:batch_size], pred['mcm']
         if mask is not None:
             pred = pred[mask]
             y = y[mask]
         
-        t_loss, loss_c, loss_n = ssloss.mcm_loss(mcm_pred[1], mcm_pred[0], y_mcm)
-        preds.append(pred.argmax(dim=-1))
-        ground_truths.append(y)
-        loss = loss_fn(pred, y.view(-1).to(torch.long))
-        if x == 'mcm':
+        if 'mcm' in config['task']:
+            # print("pred: ", pred[0].shape)
+            # print("y: ", y.shape)
+            t_loss, loss_c, loss_n = ssloss.mcm_loss(pred[1][:batch_size], pred[0][:batch_size], y)
+            acc += loss_c[2]
+            t_c += loss_c[1]
+            t_n += loss_n[1]
+            loss_c_accum += loss_c[0].item()
+            loss_n_accum += loss_n[0].item()
             loss = t_loss
+            total_loss += loss.item()
+            total_examples += (t_c + t_n)
+        elif 'classification' in config['task']:
+            preds.append(pred[:batch_size].argmax(dim=-1))
+            ground_truths.append(y)
+            loss = loss_fn(pred[:batch_size], y.view(-1).to(torch.long))
+            total_loss += loss.item() * pred.numel()
+            total_examples += pred.numel()
         
         loss.backward()
         optimizer.step()
 
-        total_loss += loss.item() * pred.numel()
-        acc += loss_c[2]
-        t_c += loss_c[1]
-        t_n += loss_n[1]
-        loss_c_accum += loss_c[0].item()
-        loss_n_accum += loss_n[0].item()
-        total_examples += pred.numel()
             
-    pred = torch.cat(preds, dim=0).detach().cpu().numpy()
-    ground_truth = torch.cat(ground_truths, dim=0).detach().cpu().numpy()
-    if config['n_classes'] == 2:
-        f1 = f1_score(ground_truth, pred)
-    else:
-        f1 = f1_score(ground_truth, pred, average='weighted')
-
-    if x == 'mcm':
+    if 'mcm' in config['task']:
         wandb.log({"loss_mcm": total_loss/total_examples}, step=epoch)
         wandb.log({"train_acc": acc / t_c}, step=epoch)
         wandb.log({"loss_c": loss_c_accum / t_c}, step=epoch)
@@ -85,52 +85,63 @@ def train(epoch, loader, dataset, model, device, args, mode, config, x):
         logging.info(f'Loss N: {loss_n_accum / t_n:.4f}')
         logging.info(f'Train RMSE: {loss_n_accum / t_n:.4f}')
         return loss_n_accum / t_n, acc / total_examples
-    else:
+    elif 'classification' in config['task']:
+        pred = torch.cat(preds, dim=0).detach().cpu().numpy()
+        ground_truth = torch.cat(ground_truths, dim=0).detach().cpu().numpy()
+        if config['n_classes'] == 2:
+            f1 = f1_score(ground_truth, pred)
+        else:
+            f1 = f1_score(ground_truth, pred, average='weighted')
+
         wandb.log({"loss": total_loss/total_examples}, step=epoch)
         wandb.log({"f1/train": f1}, step=epoch)
         logging.info(f'Train F1: {f1:.4f}, Epoch: {epoch}')
         return f1   
 
 @torch.no_grad()
-def evaluate(epoch, loader, dataset, model, device, args, mode, config, x):
+def evaluate(epoch, loader, dataset, model, device, args, mode, config):
     model.eval()
 
     '''Evaluates the model performance '''
     preds = []
     ground_truths = []
-    acc = t_n = t_c = rmse = 1e-12
+    loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = rmse = 1e-12
     for batch in tqdm(loader, disable=not args.tqdm):
         #select the seed edges from which the batch was created
-        batch_size = len(batch.y)
-        node_feats, edge_index, edge_attr, y, y_mcm, mask = dataset.get_mcm_inputs(batch, mode=mode, args=args)
+        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
+        node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
+        batch_size = y.size(0)
 
-        node_feats, edge_index, edge_attr, y, y_mcm = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device), y_mcm.to(device)
+        pred = model(node_feats, edge_index, edge_attr) 
+        if mask is not None:
+            pred = pred[mask]
+            y = y[mask]
         with torch.no_grad():
-            pred = model(node_feats, edge_index, edge_attr)
-            pred, mcm_pred = pred['supervised'][:batch_size], pred['mcm']
-            if mask is not None:
-                pred = pred[mask]
-                y = y[mask]
-            t_loss, loss_c, loss_n = ssloss.mcm_loss(mcm_pred[1], mcm_pred[0], y_mcm)
-            acc += loss_c[2]
-            t_c += loss_c[1]
-            t_n += loss_n[1]
-            rmse += loss_n[0].item()
-            preds.append(pred.argmax(dim=-1))
-            ground_truths.append(y)
+            if 'mcm' in config['task']:
+                _, loss_c, loss_n = ssloss.mcm_loss(pred[1][:batch_size], pred[0][:batch_size], y)
+                acc += loss_c[2]
+                t_c += loss_c[1]
+                t_n += loss_n[1]
+                loss_c_accum += loss_c[0].item()
+                loss_n_accum += loss_n[0].item()
+            elif 'classification' in config['task']:
+                preds.append(pred[:batch_size].argmax(dim=-1))
+                ground_truths.append(y)
 
-    pred = torch.cat(preds, dim=0).cpu().numpy()
-    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
     model.train()
-    if x == 'mcm':
-        wandb.log({f"{mode}_rmse": rmse / t_n}, step=epoch)
+    if 'mcm' in config['task']:
+        wandb.log({f"{mode}_rmse": loss_n_accum / t_n}, step=epoch)
         wandb.log({f"{mode}_accuracy": acc / t_c}, step=epoch)
-        return rmse / t_n, acc / t_c
-    else:
+        return loss_n_accum / t_n, acc / t_c
+    elif 'classification' in config['task']:
+        pred = torch.cat(preds, dim=0).cpu().numpy()
+        ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
         if config['n_classes'] == 2:
             f1 = f1_score(ground_truth, pred)
         else:
             f1 = f1_score(ground_truth, pred, average='weighted')
+        wandb.log({f"{mode}_f1": f1}, step=epoch)
+        logging.info(f'{mode} f1: {f1:.4f}')
         acc = (pred == ground_truth).mean()
         wandb.log({f"{mode}_acc": acc}, step=epoch)
         logging.info(f'{mode} acc: {acc:.4f}')
@@ -140,7 +151,7 @@ parser = create_parser()
 args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-#device = torch.device("cpu")
+device = torch.device("cpu")
 config={
     "epochs": args.epochs,
     "batch_size": args.batch_size,
@@ -155,8 +166,8 @@ config={
     #"lr": 0.0004,
     #"lr": 5e-4,
     "lr": 0.0006116418195373612,
-    "n_hidden": 32,
-    "n_gnn_layers": 2,
+    "n_hidden": args.n_hidden,
+    "n_gnn_layers": args.n_gnn_layers,
     "n_classes" : 2,
     "loss": "ce",
     "w_ce1": 1.,
@@ -166,7 +177,8 @@ config={
     #"w_ce2": 40.97,
     "dropout": 0.083,
     #"dropout": 0.10527690625126304,
-    "task": "node_classification-mcm_edge_table"
+    "task": args.task,
+    "load_model": args.load_model,
 }
 
 #define a model config dictionary and wandb logging at the same time
@@ -180,7 +192,11 @@ wandb.init(
     config=config
 )
 
-config['experiment_path'] = args.wandb_dir
+config['experiment_path'] = args.wandb_dir + wandb.run.id + '/'
+if args.save_model:
+    os.mkdir(config['experiment_path'])
+
+print(config['experiment_path'])
 logger_setup()
 
 if 'ethereum-phishing-transaction-network' in config['data']:
@@ -212,12 +228,12 @@ elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
     dataset = IBMTransactionsAML(
         root=config['data'],
         split_type='temporal_daily', 
+        pretrain = {PretrainType.MASK, PretrainType.LINK_PRED} if 'mcm' in config['task'] else {},
         splits=[0.6, 0.2, 0.2], 
         khop_neighbors=args.num_neighs,
         ports=args.ports,
         channels=config['n_hidden'],
     )
-    config['task'] = 'edge_classification'
 elif 'ogbn_arxiv' in config['data']:
     dataset = OgbnArxiv(
         root=config['data'],
@@ -234,6 +250,10 @@ else:
     raise ValueError("Invalid data name!")
 nodes = dataset.nodes
 edges = dataset.edges
+if config['load_model'] is not None:
+    logging.info(f"Loading encoders from {config['load_model']}")
+    nodes.encoder.load_state_dict(torch.load(config['load_model']+'node_encoder'))
+    edges.encoder.load_state_dict(torch.load(config['load_model']+'edge_encoder'))
 
 if 'node_classification' in config['task']:
     train_dataset, val_dataset, test_dataset = nodes.split()
@@ -258,6 +278,7 @@ config['num_edge_features'] = num_columns
 config['masked_num_numerical_edge'] = len(edges.masked_numerical_columns)
 config['masked_num_categorical_edge'] = len(edges.masked_categorical_columns)
 config['masked_categorical_ranges_edge'] = [len(edges.col_stats[col][StatType.COUNT][0]) for col in edges.tensor_frame.col_names_dict[stype.categorical] if col in edges.masked_categorical_columns] if stype.categorical in edges.tensor_frame.col_names_dict else []
+print(config['masked_categorical_ranges_edge'])
 logging.info(f"Number of edge features: {num_columns}")
 
 num_misc = len(nodes.tensor_frame.col_names_dict[stype.relation]) if stype.relation in nodes.tensor_frame.col_names_dict else 0
@@ -267,7 +288,7 @@ num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype
 config['num_node_features'] = num_numerical + num_categorical + num_timestamp + num_misc
 config['masked_num_numerical_node'] = len(nodes.masked_numerical_columns)
 config['masked_num_categorical_node'] = len(nodes.masked_categorical_columns)
-config['masked_categorical_ranges_edge'] = [len(nodes.col_stats[col][StatType.COUNT][0]) for col in nodes.tensor_frame.col_names_dict[stype.categorical] if col in nodes.masked_categorical_columns] if stype.categorical in nodes.tensor_frame.col_names_dict else []
+config['masked_categorical_ranges_node'] = [len(nodes.col_stats[col][StatType.COUNT][0]) for col in nodes.tensor_frame.col_names_dict[stype.categorical] if col in nodes.masked_categorical_columns] if stype.categorical in nodes.tensor_frame.col_names_dict else []
 logging.info(f"Number of node features: {config['num_node_features']}")
 
 if config['model'] == 'pna' or config['model'] == 'gin':
@@ -297,34 +318,37 @@ if 'edge_table' in config['task']:
 elif 'node_table' in config['task']:
     ssloss = SSLoss(device, config['masked_num_numerical_node'])
 
-for epoch in range(config['epochs']):
-    # train
-    train_rmse, train_acc = train(epoch, train_loader, dataset, model, device, args, 'train', config, 'mcm')
-    # evaluate
-    val_rmse, val_acc = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config, 'mcm')
-    te_rmse, te_acc = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config, 'mcm')
-
 # freeze tabular layers
 if args.freeze:
     print("Freezing tabular layers")
     for param in model.model.tabular_backbone.parameters():
         param.requires_grad = False
 
-best_val_f1 = 0
+if 'mcm' in config['task']:
+    best_m = [1000, 0]
+else:
+    best_m = 0
 for epoch in range(config['epochs'], config['epochs']*2):
-    # train
-    train_f1 = train(epoch, train_loader, dataset, model, device, args, 'train', config, 's')
-    # evaluate
-    val_f1 = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config, 's')
-    te_f1 = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config, 's')
+    #train_m = train(epoch, train_loader, dataset, model, device, args, 'train', config)
+    val_m = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config)
+    te_m = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config)
 
-    wandb.log({"f1/validation": val_f1}, step=epoch)
-    wandb.log({"f1/test": te_f1}, step=epoch)
-    logging.info(f'Validation F1: {val_f1:.4f}')
-    logging.info(f'Test F1: {te_f1:.4f}')
+    if 'mcm' in config['task']:
+        if val_m[0] < best_m[0] and val_m[1] > best_m[1]:
+            best_m = val_m
+            wandb.log({"best_test_acc": te_m[1]}, step=epoch)
+            logging.info(f'Best test acc: {te_m[1]:.4f}')
+            wandb.log({"best_test_rmse": te_m[0]}, step=epoch)
+            logging.info(f'Best test rmse: {te_m[0]:.4f}')
 
-    if epoch == 0:
-        wandb.log({"best_test_f1": te_f1}, step=epoch)
-    elif val_f1 > best_val_f1:
-        best_val_f1 = val_f1
-        wandb.log({"best_test_f1": te_f1}, step=epoch)
+            if args.save_model:
+                logging.info(f"Saving model to {config['experiment_path']}")
+                torch.save(nodes.encoder.state_dict(), config['experiment_path']+'node_encoder')
+                torch.save(edges.encoder.state_dict(), config['experiment_path']+'edge_encoder')
+                torch.save(model.model.state_dict(), config['experiment_path']+'model')
+
+
+    if 'classification' in config['task']:
+        if val_m > best_m:
+            best_m = val_m
+            wandb.log({"best_test_f1": te_m}, step=epoch)

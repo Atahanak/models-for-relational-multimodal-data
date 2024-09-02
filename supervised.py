@@ -74,8 +74,8 @@ config={
     #"lr": 0.0004,
     #"lr": 5e-4,
     "lr": 0.0006116418195373612,
-    "n_hidden": 32,
-    "n_gnn_layers": 2,
+    "n_hidden": args.n_hidden,
+    "n_gnn_layers": args.n_gnn_layers,
     "n_classes" : 2,
     "loss": "ce",
     "w_ce1": 1.,
@@ -85,7 +85,7 @@ config={
     #"w_ce2": 40.97,
     "dropout": 0.083,
     #"dropout": 0.10527690625126304,
-    "task": "edge_classification"
+    "task": args.task
 }
 
 #define a model config dictionary and wandb logging at the same time
@@ -131,8 +131,8 @@ elif 'ibm-transactions-for-anti-money-laundering-aml' in config['data']:
     config['lr'] = 0.0005
     config['dropout'] = 0.10527690625126304
     config['w_ce2'] = 6
-    config['n_gnn_layers'] = 2
-    config['n_hidden'] = 64
+    # config['n_gnn_layers'] = 2
+    # config['n_hidden'] = 64
     dataset = IBMTransactionsAML(
         root=config['data'],
         split_type='temporal_daily', 
@@ -211,6 +211,8 @@ num_timestamp = len(nodes.tensor_frame.col_names_dict[stype.timestamp]) if stype
 config['num_node_features'] = num_numerical + num_categorical + num_timestamp + num_misc
 logging.info(f"Number of node features: {config['num_node_features']}")
 
+config['n_encoder'] = nodes.encoder
+config['e_encoder'] = edges.encoder
 if config['model'] == 'pna' or config['model'] == 'gin':
     model = GNN(
                 config

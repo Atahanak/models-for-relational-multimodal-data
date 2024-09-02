@@ -172,3 +172,4 @@ scripts/
 outputs/
 slurm/
 environment_root.yml
+src/primitives/negative_sampling/build2/
