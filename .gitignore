@@ -171,3 +171,5 @@ saved_models/
 scripts/
 outputs/
 environment_root.yml
+src/negative_sampling/build/
+src/negative_sampling/build2/

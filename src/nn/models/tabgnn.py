@@ -44,7 +44,7 @@ class TABGNN2(Module):
         # fttransformer parameters
         feedforward_channels: Optional[int] = None,
         nhead: int = 8,
-        dropout: float = 0.5,
+        dropout: float = 0.1,
         activation: str = 'relu',
     ) -> None:
         super().__init__()
@@ -56,7 +56,7 @@ class TABGNN2(Module):
         self.nhidden = self.channels
         #self.nhidden = nhidden
         self.edge_dim = edge_dim
-        self.ff_dim = feedforward_channels if feedforward_channels is not None else 4*channels
+        self.ff_dim = 2048 #feedforward_channels if feedforward_channels is not None else 4*channels
         
         self.node_emb = Linear(node_dim, self.nhidden)
         self.edge_emb = Linear(self.edge_dim, self.nhidden)
@@ -153,7 +153,7 @@ class TABGNN(Module):
         # self.nhidden = nhidden
         self.nhidden = channels
         self.edge_dim = edge_dim + channels
-        self.ff_dim = feedforward_channels if feedforward_channels is not None else 4*channels
+        self.ff_dim = 2048 #feedforward_channels if feedforward_channels is not None else 4*channels
 
         self.cls_embedding = Parameter(torch.empty(channels))
         
@@ -163,8 +163,8 @@ class TABGNN(Module):
         self.tabular_backbone = ModuleList()
         self.gnn_backbone = ModuleList()
         for i in range(num_layers):
-            #self.tabular_backbone.append(FTTransformerLayer(channels, nhead, self.ff_dim, dropout, activation, self.nhidden))
-            self.tabular_backbone.append(RCAttentionLayer(channels, nhead, self.ff_dim, dropout, activation))
+            self.tabular_backbone.append(FTTransformerLayer(channels, nhead, self.ff_dim, dropout, activation, self.nhidden))
+            #self.tabular_backbone.append(RCAttentionLayer(channels, nhead, self.ff_dim, dropout, activation))
             #self.tabular_backbone.append(RCAttentionLayer(channels, nhead))
             self.gnn_backbone.append(PNALayer(channels, self.nhidden, deg, reverse_mp))
         self.reset_parameters()

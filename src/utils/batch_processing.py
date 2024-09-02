@@ -4,7 +4,7 @@ import numpy as np
 from torch_frame import TensorFrame
 from torch_frame import stype
 
-from src.primitives import negative_sampling
+from ..primitives import negative_sampling
 
 from torch_geometric.sampler import EdgeSamplerInput
 
