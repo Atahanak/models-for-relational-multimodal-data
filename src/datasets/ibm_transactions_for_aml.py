@@ -165,16 +165,16 @@ class IBMTransactionsAML():
             nodes = torch.unique(torch.cat([khop_source, khop_destination])).type(torch.long)
 
             node_attr = self.nodes.tensor_frame.__getitem__(nodes)
-            node_attr, _ = self.nodes.encoder(node_attr)
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
             local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
             edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
-            if self.ego:
+            if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
+            node_attr, _ = self.nodes.encoder(node_attr)
 
             return node_attr, edge_index, edge_attr, y, None
 
