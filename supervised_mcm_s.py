@@ -329,7 +329,7 @@ if 'mcm' in config['task']:
 else:
     best_m = 0
 for epoch in range(config['epochs'], config['epochs']*2):
-    #train_m = train(epoch, train_loader, dataset, model, device, args, 'train', config)
+    train_m = train(epoch, train_loader, dataset, model, device, args, 'train', config)
     val_m = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config)
     te_m = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config)
 

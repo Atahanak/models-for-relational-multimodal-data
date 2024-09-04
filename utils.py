@@ -114,27 +114,37 @@ class GNN(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.graph_model = self.get_graph_model(config)
+        self.batch_size = config['batch_size']
+        self.model = self.get_graph_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
             self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        elif config['task'] == 'mcm_edge_table':
+            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
 
     def forward(self, x, edge_index, edge_attr):
-        x, edge_attr = self.graph_model(x, edge_index, edge_attr)
+        x, edge_attr = self.model(x, edge_index, edge_attr)
         if self.config['task'] == 'edge_classification':
             out = self.classifier(x, edge_index, edge_attr)
         elif self.config['task'] == 'node_classification':
             out = self.classifier(x)
+        elif self.config['task'] == 'mcm_edge_table':
+            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+            x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+            x_target = torch.cat((x_target, target_edge_attr), 1)
+            out = self.mcm(x_target)
+
         return out
 
     def get_graph_model(self, config):
         
         n_feats = config['num_node_features']
-        #n_dim = n_feats*config['n_hidden'] 
-        n_dim = n_feats 
-        #e_dim = config['num_edge_features'] * config['n_hidden']
-        e_dim = config['num_edge_features']
+        n_dim = n_feats*config['n_hidden'] 
+        #n_dim = n_feats 
+        e_dim = config['num_edge_features'] * config['n_hidden']
+        #e_dim = config['num_edge_features']
 
         if config['model'] == "gin":
             model = GINe(num_features=n_feats, num_gnn_layers=config['n_gnn_layers'], 
@@ -157,6 +167,9 @@ class GNN(nn.Module):
                 deg=in_degree_histogram,
                 edge_updates=config['emlps'], 
                 reverse_mp=config['reverse_mp'])
+            if config['load_model'] is not None:
+                logging.info(f"Loading model from {config['load_model']}")
+                model.load_state_dict(torch.load(config['load_model'] + 'model'))
         else:
             raise ValueError("Invalid model name!")
         
