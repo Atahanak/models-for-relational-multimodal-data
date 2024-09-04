@@ -33,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class EthereumPhishing():
-        def __init__(self, root, mask_type="replace", supervised=False, pretrain: set[PretrainType] = set(), split_type='random', splits=[0.65, 0.15, 0.2], khop_neighbors=[100, 100], ports=False, ego=False, channels=64):
+        def __init__(self, root, mask_type="replace", supervised=False, pretrain: set[PretrainType] = set(), split_type='random', splits=[0.65, 0.15, 0.2], khop_neighbors=[100, 100], ports=False, ego=False, channels=64, use_cutoffs=False):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -41,16 +41,20 @@ class EthereumPhishing():
             self.pretrain = pretrain
             self.mask_type = mask_type
 
-            logger.info(f'Creating edges...')
-            self.edges = EthereumPhishingTransactions(os.path.join(root, 'edges.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, khop_neighbors=khop_neighbors, ports=ports)
-            self.edges.materialize()
-            self.edges.init_encoder(channels)
-            logger.info(f'Edges created.')
             logger.info(f'Creating nodes...')
             self.nodes = EthereumPhishingNodes(os.path.join(root, 'nodes.csv'), split_type=split_type, splits=splits, ego=ego)
             self.nodes.materialize()
             self.nodes.init_encoder(channels)
             logger.info(f'Nodes created.')
+            logger.info(f'Creating edges...')
+            cutoffs = None
+            # if pretrain set not empty
+            if use_cutoffs:
+                cutoffs = self.nodes.cutoffs
+            self.edges = EthereumPhishingTransactions(os.path.join(root, 'edges.csv'), mask_type=mask_type, pretrain=pretrain, split_type=split_type, splits=splits, khop_neighbors=khop_neighbors, ports=ports, cutoffs=cutoffs)
+            self.edges.materialize()
+            self.edges.init_encoder(channels)
+            logger.info(f'Edges created.')
             
             self.num_columns = [col for col in self.nodes.df.columns]
             self.cat_columns = []
@@ -184,33 +188,56 @@ class EthereumPhishing():
             node_attr, _ = self.nodes.encoder(node_attr)
 
             return node_attr, edge_index, edge_attr, y, None
-        
-        def get_mcm_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
-            y, ids = batch.y[:, 0], batch.y[:, 1]
-            khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
 
-            nodes = torch.unique(torch.cat([khop_source, khop_destination]))
-            nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]]).type(torch.long)
+        def get_mcm_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
+
+            y, edges = batch.y[:, :-3], batch.y[:,-3:]
+            khop_source, khop_destination, idx = self.sample_neighbors(edges, mode)
+            edge_attr = self.edges.tensor_frame.__getitem__(idx)
+            edge_attr, _ = self.edges.encoder(edge_attr)
+
+            nodes = torch.unique(torch.cat([khop_source, khop_destination])).type(torch.long)
+
+            node_attr = self.nodes.tensor_frame.__getitem__(nodes)
+            node_attr, _ = self.nodes.encoder(node_attr)
 
             n_id_map = {value.item(): index for index, value in enumerate(nodes)}
             local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
             local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
             edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
-            edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            y_mcm = edge_attr.y
-            edge_attr, _ = self.edges.encoder(edge_attr)
-
-            node_attr = self.nodes.tensor_frame.__getitem__(nodes)
             if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
-            node_attr, _ = self.nodes.encoder(node_attr)
 
-            return node_attr, edge_index, edge_attr, y, y_mcm, None
+            return node_attr, edge_index, edge_attr, y, None
+        
+        # def get_mcm_inputs(self, batch: torch_frame.TensorFrame, mode='train', args=None):
+        #     y, ids = batch.y[:, 0], batch.y[:, 1]
+        #     khop_source, khop_destination, idx = self.sample_neighbors_from_nodes(ids, mode)
+
+        #     nodes = torch.unique(torch.cat([khop_source, khop_destination]))
+        #     nodes = torch.cat([ids, nodes[~torch.isin(nodes, ids)]]).type(torch.long)
+
+        #     n_id_map = {value.item(): index for index, value in enumerate(nodes)}
+        #     local_khop_source = torch.tensor([n_id_map[node.item()] for node in khop_source], dtype=torch.long)
+        #     local_khop_destination = torch.tensor([n_id_map[node.item()] for node in khop_destination], dtype=torch.long)
+        #     edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
+
+        #     edge_attr = self.edges.tensor_frame.__getitem__(idx)
+        #     y_mcm = edge_attr.y
+        #     edge_attr, _ = self.edges.encoder(edge_attr)
+
+        #     node_attr = self.nodes.tensor_frame.__getitem__(nodes)
+        #     if args.ego:
+        #         batch_size = len(batch.y)
+        #         node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
+        #     node_attr, _ = self.nodes.encoder(node_attr)
+
+        #     return node_attr, edge_index, edge_attr, y, y_mcm, None
 
 class EthereumPhishingTransactions(torch_frame.data.Dataset):
-        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False):
+        def __init__(self, root, mask_type="replace", pretrain: set[PretrainType] = set(), split_type='temporal', splits=[0.6, 0.2, 0.2], khop_neighbors=[100, 100], ports=False, cutoffs=None):
             self.root = root
             self.split_type = split_type
             self.splits = splits
@@ -232,7 +259,10 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
             }
             self.masked_numerical_columns = ['nonce', 'value', 'gas', 'gas_price']
             self.masked_categorical_columns = []
-            #self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
+            if cutoffs is not None:
+                self.df = apply_split(self.df, 'cutoff', cutoffs, self.timestamp_col)
+            else:
+                self.df = apply_split(self.df, self.split_type, self.splits, self.timestamp_col)
             
             logger.info(f'Creating graph...')
             start = time.time()
@@ -263,7 +293,7 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
                 self.target_col = None
                 del col_to_stype['link']
             #super().__init__(self.df, col_to_stype, split_col='split', target_col=self.target_col, maskable_columns= self.maskable_columns)
-            super().__init__(self.df, col_to_stype, target_col=self.target_col, maskable_columns= self.maskable_columns)
+            super().__init__(self.df, col_to_stype, target_col=self.target_col, split_col='split', maskable_columns= self.maskable_columns)
 
         def init_encoder(self, channels):
             self.encoder = StypeWiseFeatureEncoder(
@@ -276,13 +306,16 @@ class EthereumPhishingTransactions(torch_frame.data.Dataset):
 class EthereumPhishingNodes(torch_frame.data.Dataset):
     def __init__(self, root, split_type='temporal', splits=[0.65, 0.15, 0.2], ego=False):
         self.root = root
+        self.split_type = split_type
+        self.splits = splits
         self.df = pd.read_csv(root)
         self.df['target'] = self.df.apply(lambda row: [row['label'], row['node']], axis=1)
         self.target_col = 'target'
 
         print(self.df.head())
         self.timestamp_col = 'first_transaction'
-        self.df = apply_split(self.df, split_type, splits, self.timestamp_col)
+        self.cutoffs = self.get_split_timestamps()
+        self.df = apply_split(self.df, 'cutoff', self.cutoffs, self.timestamp_col)
 
         self.df.reset_index(inplace=True)
         col_to_stype = {
@@ -305,3 +338,20 @@ class EthereumPhishingNodes(torch_frame.data.Dataset):
             self.tensor_frame.col_names_dict,
             {stype.numerical: LinearEncoder(), stype.relation: ProjectionEncoder()}
         )
+    
+    def get_split_timestamps(self):
+        # Sort the DataFrame by the timestamp column
+        sorted_df = self.df.sort_values(by=self.timestamp_col)
+        print(sorted_df.head())
+        
+        # Calculate the number of rows for each split
+        train_size = int(len(sorted_df) * self.splits[0])
+        validation_size = train_size + int(len(sorted_df) * self.splits[1])
+        
+        # Get the train and validation cutoff timestamps
+        train_cutoff = sorted_df[self.timestamp_col].iloc[train_size - 1]
+        validation_cutoff = sorted_df[self.timestamp_col].iloc[validation_size - 1]
+        
+        print(f"Train cutoff: {train_cutoff}, Validation cutoff: {validation_cutoff}")
+      
+        return train_cutoff, validation_cutoff

@@ -40,7 +40,10 @@ def train(epoch, loader, dataset, model, device, args, mode, config):
 
         optimizer.zero_grad()
 
-        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
+        if 'mcm' in config['task'] and 'ethereum-phishing-transaction-network' in config['data']:
+            node_feats, edge_index, edge_attr, y, mask = dataset.get_mcm_inputs(batch, mode='train', args=args)
+        else:
+            node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         batch_size = y.size(0)
 
@@ -107,8 +110,10 @@ def evaluate(epoch, loader, dataset, model, device, args, mode, config):
     ground_truths = []
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = rmse = 1e-12
     for batch in tqdm(loader, disable=not args.tqdm):
-        #select the seed edges from which the batch was created
-        node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
+        if 'mcm' in config['task'] and 'ethereum-phishing-transaction-network' in config['data']:
+            node_feats, edge_index, edge_attr, y, mask = dataset.get_mcm_inputs(batch, mode='train', args=args)
+        else:
+            node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         batch_size = y.size(0)
 
@@ -151,7 +156,7 @@ parser = create_parser()
 args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
+#device = torch.device("cpu")
 config={
     "epochs": args.epochs,
     "batch_size": args.batch_size,
@@ -207,14 +212,15 @@ if 'ethereum-phishing-transaction-network' in config['data']:
         khop_neighbors=args.num_neighs,
         ports=args.ports,
         ego=args.ego,
-        channels=config['n_hidden']
+        channels=config['n_hidden'],
+        use_cutoffs=True
     )
     config['lr'] = 0.0008
     config['dropout'] = 0.123
     config['w_ce2'] = 1.16
     config['n_gnn_layers'] = 2
-    config['n_hidden'] = 32
-    config['task'] = 'node_classification-mcm_edge_table'
+    # config['n_hidden'] = 32
+    # config['task'] = 'node_classification-mcm_edge_table'
 elif 'elliptic_bitcoin_dataset' in config['data']:
     dataset = EllipticBitcoin(
         root=config['data'],
@@ -268,6 +274,9 @@ if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] ==
 train_loader = DataLoader(train_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=True, num_workers=4)
 val_loader = DataLoader(val_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
 test_loader = DataLoader(test_dataset.tensor_frame, batch_size=config['batch_size'], shuffle=False, num_workers=4)
+logging.info(f"Train loader size: {len(train_loader)}")
+logging.info(f"Val loader size: {len(val_loader)}")
+logging.info(f"Test loader size: {len(test_loader)}")
 
 num_misc = len(edges.tensor_frame.col_names_dict[stype.relation]) if stype.relation in edges.tensor_frame.col_names_dict else 0
 num_numerical = len(edges.tensor_frame.col_names_dict[stype.numerical]) if stype.numerical in edges.tensor_frame.col_names_dict else 0
@@ -278,7 +287,6 @@ config['num_edge_features'] = num_columns
 config['masked_num_numerical_edge'] = len(edges.masked_numerical_columns)
 config['masked_num_categorical_edge'] = len(edges.masked_categorical_columns)
 config['masked_categorical_ranges_edge'] = [len(edges.col_stats[col][StatType.COUNT][0]) for col in edges.tensor_frame.col_names_dict[stype.categorical] if col in edges.masked_categorical_columns] if stype.categorical in edges.tensor_frame.col_names_dict else []
-print(config['masked_categorical_ranges_edge'])
 logging.info(f"Number of edge features: {num_columns}")
 
 num_misc = len(nodes.tensor_frame.col_names_dict[stype.relation]) if stype.relation in nodes.tensor_frame.col_names_dict else 0
