@@ -179,13 +179,13 @@ class EthereumPhishing():
             edge_index = torch.cat((local_khop_source.unsqueeze(0), local_khop_destination.unsqueeze(0)))
 
             edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            edge_attr, _ = self.edges.encoder(edge_attr)
+            #edge_attr, _ = self.edges.encoder(edge_attr)
 
             node_attr = self.nodes.tensor_frame.__getitem__(nodes)
             if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
-            node_attr, _ = self.nodes.encoder(node_attr)
+            #node_attr, _ = self.nodes.encoder(node_attr)
 
             return node_attr, edge_index, edge_attr, y, None
 
@@ -194,7 +194,7 @@ class EthereumPhishing():
             y, edges = batch.y[:, :-3], batch.y[:,-3:]
             khop_source, khop_destination, idx = self.sample_neighbors(edges, mode)
             edge_attr = self.edges.tensor_frame.__getitem__(idx)
-            edge_attr, _ = self.edges.encoder(edge_attr)
+            #edge_attr, _ = self.edges.encoder(edge_attr)
 
             nodes = torch.unique(torch.cat([khop_source, khop_destination])).type(torch.long)
 
@@ -208,7 +208,7 @@ class EthereumPhishing():
             if args.ego:
                 batch_size = len(batch.y)
                 node_attr = add_EgoIDs(node_attr, edge_index[:, :batch_size])
-            node_attr, _ = self.nodes.encoder(node_attr)
+            #node_attr, _ = self.nodes.encoder(node_attr)
 
             return node_attr, edge_index, edge_attr, y, None
         

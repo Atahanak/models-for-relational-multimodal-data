@@ -180,6 +180,8 @@ class TABGNNS(nn.Module):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
+        self.node_encoder = config['node_encoder']
+        self.edge_encoder = config['edge_encoder']
 
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
@@ -196,6 +198,8 @@ class TABGNNS(nn.Module):
     def forward(self, x, edge_index, edge_attr):
 
         #x, edge_attr, target_edge_attr = self.model(x, edge_index, edge_attr, target_edge_attr)
+        x, _ = self.node_encoder(x)
+        edge_attr, _ = self.edge_encoder(edge_attr)
         x, edge_attr = self.model(x, edge_index, edge_attr)
 
         if self.config['task'] == 'edge_classification':

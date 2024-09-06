@@ -137,6 +137,8 @@ def evaluate(epoch, loader, dataset, model, device, args, mode, config):
     if 'mcm' in config['task']:
         wandb.log({f"{mode}_rmse": loss_n_accum / t_n}, step=epoch)
         wandb.log({f"{mode}_accuracy": acc / t_c}, step=epoch)
+        logging.info(f'{mode} RMSE: {loss_n_accum / t_n:.4f}')
+        logging.info(f'{mode} Accuracy: {acc / t_c:.4f}')
         return loss_n_accum / t_n, acc / t_c
     elif 'classification' in config['task']:
         pred = torch.cat(preds, dim=0).cpu().numpy()
@@ -254,12 +256,15 @@ elif 'ogbn_arxiv' in config['data']:
     config['loss_weights'] = [1 for _ in range(config['n_classes'])]
 else:
     raise ValueError("Invalid data name!")
+
 nodes = dataset.nodes
 edges = dataset.edges
 if config['load_model'] is not None:
     logging.info(f"Loading encoders from {config['load_model']}")
     nodes.encoder.load_state_dict(torch.load(config['load_model']+'node_encoder'))
     edges.encoder.load_state_dict(torch.load(config['load_model']+'edge_encoder'))
+config['node_encoder'] = nodes.encoder
+config['edge_encoder'] = edges.encoder
 
 if 'node_classification' in config['task']:
     train_dataset, val_dataset, test_dataset = nodes.split()
@@ -336,13 +341,16 @@ if 'mcm' in config['task']:
     best_m = [1000, 0]
 else:
     best_m = 0
-for epoch in range(config['epochs'], config['epochs']*2):
+for epoch in range(0, config['epochs']): #, config['epochs']*2):
     train_m = train(epoch, train_loader, dataset, model, device, args, 'train', config)
     val_m = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config)
     te_m = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config)
 
     if 'mcm' in config['task']:
-        if val_m[0] < best_m[0] and val_m[1] > best_m[1]:
+        logging.info(best_m)
+        logging.info(val_m)
+        logging.info(te_m)
+        if (val_m[0] < best_m[0]) and (val_m[1] > best_m[1] or best_m[1] == 1):
             best_m = val_m
             wandb.log({"best_test_acc": te_m[1]}, step=epoch)
             logging.info(f'Best test acc: {te_m[1]:.4f}')
