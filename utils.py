@@ -115,6 +115,8 @@ class GNN(nn.Module):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
+        self.node_encoder = config['node_encoder']
+        self.edge_encoder = config['edge_encoder']
         self.model = self.get_graph_model(config)
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
@@ -124,6 +126,8 @@ class GNN(nn.Module):
             self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
 
     def forward(self, x, edge_index, edge_attr):
+        x, _ = self.node_encoder(x)
+        edge_attr, _ = self.edge_encoder(edge_attr)
         x, edge_attr = self.model(x, edge_index, edge_attr)
         if self.config['task'] == 'edge_classification':
             out = self.classifier(x, edge_index, edge_attr)
