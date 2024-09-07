@@ -149,7 +149,7 @@ def evaluate(epoch, loader, dataset, model, device, args, mode, config):
             f1 = f1_score(ground_truth, pred, average='weighted')
         wandb.log({f"{mode}_f1": f1}, step=epoch)
         logging.info(f'{mode} f1: {f1:.4f}')
-        acc = (pred == ground_truth).mean()
+        #acc = (pred == ground_truth).mean()
         wandb.log({f"{mode}_acc": acc}, step=epoch)
         logging.info(f'{mode} acc: {acc:.4f}')
         return f1
