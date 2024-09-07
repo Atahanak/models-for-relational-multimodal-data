@@ -111,9 +111,9 @@ def evaluate(epoch, loader, dataset, model, device, args, mode, config):
     loss_c_accum = loss_n_accum = total_count = t_c = t_n = acc = rmse = 1e-12
     for batch in tqdm(loader, disable=not args.tqdm):
         if 'mcm' in config['task'] and 'ethereum-phishing-transaction-network' in config['data']:
-            node_feats, edge_index, edge_attr, y, mask = dataset.get_mcm_inputs(batch, mode='train', args=args)
+            node_feats, edge_index, edge_attr, y, mask = dataset.get_mcm_inputs(batch, mode=mode, args=args)
         else:
-            node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode='train', args=args)
+            node_feats, edge_index, edge_attr, y, mask = dataset.get_graph_inputs(batch, mode=mode, args=args)
         node_feats, edge_index, edge_attr, y = node_feats.to(device), edge_index.to(device), edge_attr.to(device), y.to(device)
         batch_size = y.size(0)
 
