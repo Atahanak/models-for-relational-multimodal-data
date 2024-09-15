@@ -43,23 +43,6 @@ class TABGNNFused(Module):
         channels (int): Hidden channel dimensionality
         out_channels (int): Output channels dimensionality
         num_layers (int): Number of layers.  (default: :obj:`3`)
-        col_stats(dict[str,dict[:class:`torch_frame.data.stats.StatType`,Any]]):
-             A dictionary that maps column name into stats.
-             Available as :obj:`dataset.col_stats`.
-        col_names_dict (dict[:obj:`torch_frame.stype`, list[str]]): A
-            dictionary that maps stype to a list of column names. The column
-            names are sorted based on the ordering that appear in
-            :obj:`tensor_frame.feat_dict`. Available as
-            :obj:`tensor_frame.col_names_dict`.
-        stype_encoder_dict
-            (dict[:class:`torch_frame.stype`,
-            :class:`torch_frame.nn.encoder.StypeEncoder`], optional):
-            A dictionary mapping stypes into their stype encoders.
-            (default: :obj:`None`, will call
-            :class:`torch_frame.nn.encoder.EmbeddingEncoder()` for categorical
-            feature and :class:`torch_frame.nn.encoder.LinearEncoder()`
-            for numerical feature)
-        pretrain (bool): If :obj:`True`, the model will be pre-trained, otherwise it will be trained end-to-end. (default: :obj:`False`)
     """
     def __init__(
         self,
@@ -86,6 +69,7 @@ class TABGNNFused(Module):
         
         self.channels = channels
         self.nhidden = nhidden
+        self.node_dim = node_dim
         self.edge_dim = edge_dim + channels
         self.encoder = encoder
         self.reverse_mp = reverse_mp
@@ -132,7 +116,7 @@ class TABGNNFused(Module):
         for p in self.tab_conv.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
-        self.encoder.reset_parameters()
+        # self.encoder.reset_parameters()
         for layer in self.backbone:
             layer.reset_parameters()
 
@@ -169,7 +153,7 @@ class TABGNNFused(Module):
         """
         B = len(target_edge_attr)
 
-        x_gnn = self.node_emb(x)
+        x_gnn = self.node_emb(x.view(-1, self.node_dim))
         
         x_cls = self.cls_embedding.repeat(B, 1, 1)
         target_edge_attr = torch.cat([x_cls, target_edge_attr], dim=1)

@@ -197,7 +197,6 @@ class TABGNNS(nn.Module):
             self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
         elif config['task'] == 'mcm_edge_table':
             self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
-
     
     def forward(self, x, edge_index, edge_attr):
 
@@ -263,7 +262,10 @@ class TABGNNFusedS(nn.Module):
         super().__init__()
         self.config = config
         self.batch_size = config['batch_size']
+        self.node_encoder = config['node_encoder']
+        self.edge_encoder = config['edge_encoder']
         self.model = self.get_model(config)
+
         if config['task'] == 'edge_classification':
             self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
@@ -271,12 +273,18 @@ class TABGNNFusedS(nn.Module):
         elif config['task'] == 'node_classification-mcm_edge_table':
             self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
             self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+        elif config['task'] == 'mcm_edge_table':
+            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
     
     def forward(self, x, edge_index, edge_attr):
-        x, edge_attr = self.model(x, edge_index, edge_attr)
+
+        edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+        x, _ = self.node_encoder(x)
+        edge_attr, _ = self.edge_encoder(edge_attr)
+        target_edge_attr, _ = self.edge_encoder(target_edge_attr)
+        x, edge_attr, target_edge_attr  = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)
         if self.config['task'] == 'edge_classification':
-            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
-            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
             out = self.classifier(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
             out = self.classifier(x[:, 0, :])
@@ -286,6 +294,10 @@ class TABGNNFusedS(nn.Module):
             x_target = torch.cat((x_target, edge_attr), 1)
             out2 = self.mcm(x_target)
             return {"supervised": out, "mcm": out2}
+        elif self.config['task'] == 'mcm_edge_table':
+            x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+            x_target = torch.cat((x_target, target_edge_attr), 1)
+            out = self.mcm(x_target)
         return out
 
     def get_model(self, config):
@@ -310,6 +322,9 @@ class TABGNNFusedS(nn.Module):
                 edge_dim=e_dim, 
                 deg=in_degree_histogram,
                 reverse_mp=config['reverse_mp'])
+            if config['load_model'] is not None:
+                logging.info(f"Loading model from {config['load_model']}")
+                model.load_state_dict(torch.load(config['load_model'] + 'model'))
         else:
             raise ValueError("Invalid model name!")
         
