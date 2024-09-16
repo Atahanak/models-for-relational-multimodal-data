@@ -271,7 +271,7 @@ if 'node_classification' in config['task']:
 else:
     train_dataset, val_dataset, test_dataset = edges.split()
 
-if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnnfused' or config['model'] == 'cpna':
+if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnnfused' or config['model'] == 'cpna'  or config['model'] == "cpnatab":
     edge_index = edges.train_graph.edge_index
     num_nodes = edges.train_graph.num_nodes
     config["in_degrees"] = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
@@ -304,7 +304,7 @@ config['masked_num_categorical_node'] = len(nodes.masked_categorical_columns)
 config['masked_categorical_ranges_node'] = [len(nodes.col_stats[col][StatType.COUNT][0]) for col in nodes.tensor_frame.col_names_dict[stype.categorical] if col in nodes.masked_categorical_columns] if stype.categorical in nodes.tensor_frame.col_names_dict else []
 logging.info(f"Number of node features: {config['num_node_features']}")
 
-if config['model'] == 'pna' or config['model'] == 'gin' or config['model'] == 'cpna':
+if config['model'] == 'pna' or config['model'] == 'gin' or config['model'] == 'cpna' or config['model'] == "cpnatab":
     model = GNN(
                 config
             ).to(device)
@@ -325,6 +325,10 @@ else:
 
 loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor(config['loss_weights']).to(device))
 optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
+
+model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+logging.info(f"Number of trainable parameters: {model_params}")
+wandb.log({"trainable_parameters": model_params})
 
 if 'edge_table' in config['task']:
     ssloss = SSLoss(device, config['masked_num_numerical_edge'])
