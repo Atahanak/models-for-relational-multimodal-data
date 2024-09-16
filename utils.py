@@ -10,7 +10,7 @@ from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 import torch 
 import torch.nn as nn
 
-from src.nn.gnn.model import GINe, PNAS
+from src.nn.gnn.model import GINe, PNAS, CPNA
 from src.nn.models import FTTransformer#, Trompt
 from src.nn.gnn.decoder import ClassifierHead, NodeClassificationHead
 from src.nn.decoder import MCMHead
@@ -119,23 +119,39 @@ class GNN(nn.Module):
         self.edge_encoder = config['edge_encoder']
         self.model = self.get_graph_model(config)
         if config['task'] == 'edge_classification':
-            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            if config['model'] == "cpna":
+                self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'], e_hidden=config['num_edge_features'] * config['n_hidden'])
+            else:
+                self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
-            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            if config['model'] == "cpna":
+                self.classifier = NodeClassificationHead(config['n_classes'], config['num_edge_features'] * config['n_hidden'], dropout=config['dropout'])
+            else:
+                self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'mcm_edge_table':
-            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+            if config['model'] == "cpna":
+                self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=config['num_edge_features']+2)
+            else:
+                self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
 
     def forward(self, x, edge_index, edge_attr):
         x, _ = self.node_encoder(x)
         edge_attr, _ = self.edge_encoder(edge_attr)
         x, edge_attr = self.model(x, edge_index, edge_attr)
+        if self.config['model'] == "cpna":
+            edge_attr = edge_attr.reshape(-1, self.config['num_edge_features'] * self.config['n_hidden'])
+            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+        else:
+            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+        edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+
         if self.config['task'] == 'edge_classification':
-            out = self.classifier(x, edge_index, edge_attr)
+            out = self.classifier(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
             out = self.classifier(x)
         elif self.config['task'] == 'mcm_edge_table':
-            edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
-            edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
+            # edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
+            # edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
             x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
             x_target = torch.cat((x_target, target_edge_attr), 1)
             out = self.mcm(x_target)
@@ -174,6 +190,24 @@ class GNN(nn.Module):
             if config['load_model'] is not None:
                 logging.info(f"Loading model from {config['load_model']}")
                 model.load_state_dict(torch.load(config['load_model'] + 'model'))
+        elif config['model'] == "cpna":
+            if config['in_degrees'] is None:
+                raise ValueError("In degrees are not provided for PNA model!")
+            in_degrees = config['in_degrees']
+            max_in_degree = int(max(in_degrees))
+            in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+            in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+            model = CPNA(
+                num_features=n_dim,
+                n_hidden=config['n_hidden'], 
+                num_gnn_layers=config['n_gnn_layers'], 
+                edge_dim=e_dim, 
+                deg=in_degree_histogram,
+                edge_updates=config['emlps'], 
+                reverse_mp=config['reverse_mp'])
+            if config['load_model'] is not None:
+                logging.info(f"Loading model from {config['load_model']}")
+                model.load_state_dict(torch.load(config['load_model'] + 'model')) 
         else:
             raise ValueError("Invalid model name!")
         

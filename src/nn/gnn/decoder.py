@@ -3,11 +3,15 @@ import torch.nn as nn
 from torch_geometric.nn import Linear
 
 class ClassifierHead(nn.Module):
-    def __init__(self, n_classes=1, n_hidden=128, dropout=0.5):
+    def __init__(self, n_classes=1, n_hidden=128, dropout=0.5, e_hidden=None):
         super().__init__()
         self.n_hidden = n_hidden
+        if e_hidden is None:
+            self.e_hidden = n_hidden
+        else:
+            self.e_hidden = e_hidden
         
-        self.mlp = nn.Sequential(Linear(n_hidden*3, 50), nn.ReLU(), nn.Dropout(dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(dropout),
+        self.mlp = nn.Sequential(Linear(n_hidden*2 + self.e_hidden, 50), nn.ReLU(), nn.Dropout(dropout),Linear(50, 25), nn.ReLU(), nn.Dropout(dropout),
                               Linear(25, n_classes))
     
     def forward(self, x, edge_index, edge_attr):
