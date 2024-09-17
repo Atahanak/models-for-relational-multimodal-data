@@ -328,7 +328,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
 
 model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 logging.info(f"Number of trainable parameters: {model_params}")
-wandb.log({"trainable_parameters": model_params})
+wandb.log({"trainable_parameters": model_params}, step=0)
 
 if 'edge_table' in config['task']:
     ssloss = SSLoss(device, config['masked_num_numerical_edge'])
