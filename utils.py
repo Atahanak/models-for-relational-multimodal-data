@@ -53,6 +53,7 @@ def create_parser():
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
     parser.add_argument("--load_model", default=None, type=str, help="Load model.")
+    parser.add_argument("--checkpoint", default=None, type=str, help="Load checkpoint.")
     parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
     parser.add_argument("--group", default="null", type=str, help="wandb group", required=False)
     parser.add_argument("--freeze", action="store_true", help="freeze model parameters for tabular backbone", required=False)
@@ -78,17 +79,17 @@ class TT(nn.Module):
         self.config = config
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
-            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            self.decoder = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
-            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            self.decoder = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
     
     def forward(self, x, edge_index, edge_attr):
         x, x_cls = self.model(x)
         if self.config['task'] == 'edge_classification':
             edge_attr, e_cls = self.model(edge_attr)
-            out = self.classifier(x_cls, edge_index, e_cls)
+            out = self.decoder(x_cls, edge_index, e_cls)
         elif self.config['task'] == 'node_classification':
-            out = self.classifier(x_cls)
+            out = self.decoder(x_cls)
 
         return out
 
@@ -120,19 +121,22 @@ class GNN(nn.Module):
         self.model = self.get_graph_model(config)
         if config['task'] == 'edge_classification':
             if config['model'] == "cpna" or self.config['model'] == "cpnatab":
-                self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'], e_hidden=config['num_edge_features'] * config['n_hidden'])
+                self.decoder = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'], e_hidden=config['num_edge_features'] * config['n_hidden'])
             else:
-                self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+                self.decoder = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
             if config['model'] == "cpna" or self.config['model'] == "cpnatab":
-                self.classifier = NodeClassificationHead(config['n_classes'], config['num_edge_features'] * config['n_hidden'], dropout=config['dropout'])
+                self.decoder = NodeClassificationHead(config['n_classes'], config['num_edge_features'] * config['n_hidden'], dropout=config['dropout'])
             else:
-                self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+                self.decoder = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'mcm_edge_table':
             if config['model'] == "cpna" or self.config['model'] == "cpnatab":
-                self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=config['num_edge_features']+2)
+                self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=config['num_edge_features']+2)
             else:
-                self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+                self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+        if config['load_model'] is not None and config['checkpoint'] is not None:
+            logging.info(f"Loading decoder from {config['load_model']}")
+            self.decoder.load_state_dict(torch.load(config['load_model'] + 'decoder')) 
 
     def forward(self, x, edge_index, edge_attr):
         x, _ = self.node_encoder(x)
@@ -146,15 +150,15 @@ class GNN(nn.Module):
         edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
 
         if self.config['task'] == 'edge_classification':
-            out = self.classifier(x, target_edge_index, target_edge_attr)
+            out = self.decoder(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
-            out = self.classifier(x)
+            out = self.decoder(x)
         elif self.config['task'] == 'mcm_edge_table':
             # edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
             # edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
             x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
             x_target = torch.cat((x_target, target_edge_attr), 1)
-            out = self.mcm(x_target)
+            out = self.decoder(x_target)
 
         return out
 
@@ -241,14 +245,17 @@ class TABGNNS(nn.Module):
 
         self.model = self.get_model(config)
         if config['task'] == 'edge_classification':
-            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            self.decoder = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
-            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
-        elif config['task'] == 'node_classification-mcm_edge_table':
-            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
-            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+            self.decoder = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        # elif config['task'] == 'node_classification-mcm_edge_table':
+        #     self.decoder = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        #     self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
         elif config['task'] == 'mcm_edge_table':
-            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
+            self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
+        if config['load_model'] is not None and config['checkpoint'] is not None:
+            logging.info(f"Loading decoder from {config['load_model']}")
+            self.decoder.load_state_dict(torch.load(config['load_model'] + 'decoder')) 
     
     def forward(self, x, edge_index, edge_attr):
 
@@ -260,21 +267,21 @@ class TABGNNS(nn.Module):
         if self.config['task'] == 'edge_classification':
             edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
             edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
-            out = self.classifier(x, target_edge_index, target_edge_attr)
+            out = self.decoder(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
-            out = self.classifier(x)
-        elif self.config['task'] == 'node_classification-mcm_edge_table':
-            out = self.classifier(x)
-            x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
-            x_target = torch.cat((x_target, edge_attr), 1)
-            out2 = self.mcm(x_target)
-            return {"supervised": out, "mcm": out2}
+            out = self.decoder(x)
+        # elif self.config['task'] == 'node_classification-mcm_edge_table':
+        #     out = self.decoder(x)
+        #     x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+        #     x_target = torch.cat((x_target, edge_attr), 1)
+        #     out2 = self.mcm(x_target)
+        #     return {"supervised": out, "mcm": out2}
         elif self.config['task'] == 'mcm_edge_table':
             edge_attr, target_edge_attr = edge_attr[self.batch_size:, :], edge_attr[:self.batch_size, :]
             edge_index, target_edge_index = edge_index[:, self.batch_size:], edge_index[:, :self.batch_size]
             x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
             x_target = torch.cat((x_target, target_edge_attr), 1)
-            out = self.mcm(x_target)
+            out = self.decoder(x_target)
         return out
 
     def get_model(self, config):
@@ -319,14 +326,17 @@ class TABGNNFusedS(nn.Module):
         self.model = self.get_model(config)
 
         if config['task'] == 'edge_classification':
-            self.classifier = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+            self.decoder = ClassifierHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
         elif config['task'] == 'node_classification':
-            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
-        elif config['task'] == 'node_classification-mcm_edge_table':
-            self.classifier = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
-            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
+            self.decoder = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        # elif config['task'] == 'node_classification-mcm_edge_table':
+        #     self.decoder = NodeClassificationHead(config['n_classes'], config['n_hidden'], dropout=config['dropout'])
+        #     self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
         elif config['task'] == 'mcm_edge_table':
-            self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
+            self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
+        if config['load_model'] is not None and config['checkpoint'] is not None:
+            logging.info(f"Loading decoder from {config['load_model']}")
+            self.decoder.load_state_dict(torch.load(config['load_model'] + 'decoder')) 
     
     def forward(self, x, edge_index, edge_attr):
 
@@ -337,19 +347,19 @@ class TABGNNFusedS(nn.Module):
         target_edge_attr, _ = self.edge_encoder(target_edge_attr)
         x, edge_attr, target_edge_attr  = self.model(x, edge_index, edge_attr, target_edge_index, target_edge_attr)
         if self.config['task'] == 'edge_classification':
-            out = self.classifier(x, target_edge_index, target_edge_attr)
+            out = self.decoder(x, target_edge_index, target_edge_attr)
         elif self.config['task'] == 'node_classification':
-            out = self.classifier(x[:, 0, :])
-        elif self.config['task'] == 'node_classification-mcm_edge_table':
-            out = self.classifier(x)
-            x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
-            x_target = torch.cat((x_target, edge_attr), 1)
-            out2 = self.mcm(x_target)
-            return {"supervised": out, "mcm": out2}
+            out = self.decoder(x[:, 0, :])
+        # elif self.config['task'] == 'node_classification-mcm_edge_table':
+        #     out = self.decoder(x)
+        #     x_target = x[edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
+        #     x_target = torch.cat((x_target, edge_attr), 1)
+        #     out2 = self.mcm(x_target)
+        #     return {"supervised": out, "mcm": out2}
         elif self.config['task'] == 'mcm_edge_table':
             x_target = x[target_edge_index.T].reshape(-1, 2 * self.config["n_hidden"])
             x_target = torch.cat((x_target, target_edge_attr), 1)
-            out = self.mcm(x_target)
+            out = self.decoder(x_target)
         return out
 
     def get_model(self, config):

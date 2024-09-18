@@ -186,6 +186,7 @@ config={
     #"dropout": 0.10527690625126304,
     "task": args.task,
     "load_model": args.load_model,
+    "checkopoint": args.checkpoint,
 }
 
 #define a model config dictionary and wandb logging at the same time
@@ -366,6 +367,7 @@ for epoch in range(0, config['epochs']): #, config['epochs']*2):
                 torch.save(nodes.encoder.state_dict(), config['experiment_path']+'node_encoder')
                 torch.save(edges.encoder.state_dict(), config['experiment_path']+'edge_encoder')
                 torch.save(model.model.state_dict(), config['experiment_path']+'model')
+                torch.save(model.decoder.state_dict(), config['experiment_path']+'decoder')
 
 
     if 'classification' in config['task']:
