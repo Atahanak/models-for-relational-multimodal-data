@@ -53,7 +53,7 @@ def create_parser():
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
     parser.add_argument("--load_model", default=None, type=str, help="Load model.")
-    parser.add_argument("--checkpoint", default=None, type=str, help="Load checkpoint.")
+    parser.add_argument("--checkpoint", action='store_true', help="Load checkpoint.")
     parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
     parser.add_argument("--group", default="null", type=str, help="wandb group", required=False)
     parser.add_argument("--freeze", action="store_true", help="freeze model parameters for tabular backbone", required=False)
@@ -134,7 +134,7 @@ class GNN(nn.Module):
                 self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=config['num_edge_features']+2)
             else:
                 self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
-        if config['load_model'] is not None and config['checkpoint'] is not None:
+        if config['load_model'] is not None and config['checkpoint']:
             logging.info(f"Loading decoder from {config['load_model']}")
             self.decoder.load_state_dict(torch.load(config['load_model'] + 'decoder')) 
 
@@ -253,7 +253,7 @@ class TABGNNS(nn.Module):
         #     self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
         elif config['task'] == 'mcm_edge_table':
             self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
-        if config['load_model'] is not None and config['checkpoint'] is not None:
+        if config['load_model'] is not None and config['checkpoint']:
             logging.info(f"Loading decoder from {config['load_model']}")
             self.decoder.load_state_dict(torch.load(config['load_model'] + 'decoder')) 
     
@@ -334,7 +334,7 @@ class TABGNNFusedS(nn.Module):
         #     self.mcm = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3)
         elif config['task'] == 'mcm_edge_table':
             self.decoder = MCMHead(config['n_hidden'], config['masked_num_numerical_edge'], config['masked_categorical_ranges_edge'], w=3) 
-        if config['load_model'] is not None and config['checkpoint'] is not None:
+        if config['load_model'] is not None and config['checkpoint']:
             logging.info(f"Loading decoder from {config['load_model']}")
             self.decoder.load_state_dict(torch.load(config['load_model'] + 'decoder')) 
     

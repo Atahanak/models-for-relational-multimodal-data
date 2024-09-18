@@ -1,6 +1,8 @@
 import logging
 import os
+import shutil
 import wandb
+import json
 from tqdm import tqdm as tqdm
 
 from torch_frame.data import DataLoader
@@ -18,7 +20,7 @@ from src.datasets import IBMTransactionsAML, EthereumPhishing, EllipticBitcoin, 
 from src.datasets.util.mask import PretrainType
 from src.utils.loss import SSLoss
 from sklearn.metrics import f1_score
-from utils import create_parser, logger_setup, save_model
+from utils import create_parser, logger_setup
 from utils import TT, GNN, TABGNNS, TABGNNFusedS
 
 # workaround for CUDA invalid configuration bug
@@ -53,10 +55,8 @@ def train(epoch, loader, dataset, model, device, args, mode, config):
             y = y[mask]
         
         if 'mcm' in config['task']:
-            # print("pred: ", pred[0].shape)
-            # print("y: ", y.shape)
             t_loss, loss_c, loss_n = ssloss.mcm_loss(pred[1][:batch_size], pred[0][:batch_size], y)
-            acc += loss_c[2]
+            acc += loss_c[2].item()
             t_c += loss_c[1]
             t_n += loss_n[1]
             loss_c_accum += loss_c[0].item()
@@ -87,7 +87,7 @@ def train(epoch, loader, dataset, model, device, args, mode, config):
         logging.info(f'Loss C: {loss_c_accum / t_c:.4f}')
         logging.info(f'Loss N: {loss_n_accum / t_n:.4f}')
         logging.info(f'Train RMSE: {loss_n_accum / t_n:.4f}')
-        return loss_n_accum / t_n, acc / total_examples
+        return [loss_n_accum / t_n, acc / total_examples]
     elif 'classification' in config['task']:
         pred = torch.cat(preds, dim=0).detach().cpu().numpy()
         ground_truth = torch.cat(ground_truths, dim=0).detach().cpu().numpy()
@@ -124,7 +124,7 @@ def evaluate(epoch, loader, dataset, model, device, args, mode, config):
         with torch.no_grad():
             if 'mcm' in config['task']:
                 _, loss_c, loss_n = ssloss.mcm_loss(pred[1][:batch_size], pred[0][:batch_size], y)
-                acc += loss_c[2]
+                acc += loss_c[2].item()
                 t_c += loss_c[1]
                 t_n += loss_n[1]
                 loss_c_accum += loss_c[0].item()
@@ -139,7 +139,7 @@ def evaluate(epoch, loader, dataset, model, device, args, mode, config):
         wandb.log({f"{mode}_accuracy": acc / t_c}, step=epoch)
         logging.info(f'{mode} RMSE: {loss_n_accum / t_n:.4f}')
         logging.info(f'{mode} Accuracy: {acc / t_c:.4f}')
-        return loss_n_accum / t_n, acc / t_c
+        return [loss_n_accum / t_n, acc / t_c]
     elif 'classification' in config['task']:
         pred = torch.cat(preds, dim=0).cpu().numpy()
         ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
@@ -158,7 +158,6 @@ parser = create_parser()
 args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-#device = torch.device("cpu")
 config={
     "epochs": args.epochs,
     "batch_size": args.batch_size,
@@ -186,25 +185,35 @@ config={
     #"dropout": 0.10527690625126304,
     "task": args.task,
     "load_model": args.load_model,
-    "checkopoint": args.checkpoint,
+    "checkpoint": args.checkpoint,
+    "device": device,
 }
+logging.info(config)
 
-#define a model config dictionary and wandb logging at the same time
-print("Testing: ", args.testing)
+start = 0
+run_id = None
+if args.checkpoint:
+    names = args.load_model.split('/')
+    start = int(names[-2]) + 1
+    run_id = names[-3]
+    logging.info(f"Starting from epoch {start} of run {run_id}")
+
 wandb.init(
     dir=args.wandb_dir,
     mode="disabled" if args.testing else "online",
-    project="lol", #replace this with your wandb project name if you want to use wandb logging
+    project="test", #replace this with your wandb project name if you want to use wandb logging
     entity="cse3000",
     group=args.group,
-    config=config
+    config=config,
+    id=run_id if run_id is not None else None,    
+    resume="must" if run_id is not None else None,
 )
 
-config['experiment_path'] = args.wandb_dir + wandb.run.id + '/'
+config['experiment_path'] = args.wandb_dir + '/' + wandb.run.id + '/'
 if args.save_model:
-    os.mkdir(config['experiment_path'])
-
-print(config['experiment_path'])
+    if not os.path.exists(config['experiment_path']):
+        os.mkdir(config['experiment_path'])
+logging.info(config['experiment_path'])
 logger_setup()
 
 if 'ethereum-phishing-transaction-network' in config['data']:
@@ -326,10 +335,9 @@ else:
 
 loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor(config['loss_weights']).to(device))
 optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
-
 model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 logging.info(f"Number of trainable parameters: {model_params}")
-wandb.log({"trainable_parameters": model_params}, step=0)
+wandb.log({"trainable_parameters": model_params}, step=start)
 
 if 'edge_table' in config['task']:
     ssloss = SSLoss(device, config['masked_num_numerical_edge'])
@@ -343,10 +351,13 @@ if args.freeze:
         param.requires_grad = False
 
 if 'mcm' in config['task']:
-    best_m = [1000, 0]
+    best_m = [1000, -1]
 else:
-    best_m = 0
-for epoch in range(0, config['epochs']): #, config['epochs']*2):
+    best_m = -1
+if args.checkpoint:
+    best_m = json.load(open(config['experiment_path']+'best_m.json', 'r'))['best_m']
+
+for epoch in range(start, start+config['epochs']):
     train_m = train(epoch, train_loader, dataset, model, device, args, 'train', config)
     val_m = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config)
     te_m = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config)
@@ -356,6 +367,7 @@ for epoch in range(0, config['epochs']): #, config['epochs']*2):
         logging.info(val_m)
         logging.info(te_m)
         if (val_m[0] < best_m[0]) and (val_m[1] > best_m[1] or best_m[1] == 1):
+
             best_m = val_m
             wandb.log({"best_test_acc": te_m[1]}, step=epoch)
             logging.info(f'Best test acc: {te_m[1]:.4f}')
@@ -363,14 +375,31 @@ for epoch in range(0, config['epochs']): #, config['epochs']*2):
             logging.info(f'Best test rmse: {te_m[0]:.4f}')
 
             if args.save_model:
-                logging.info(f"Saving model to {config['experiment_path']}")
+                logging.info(f"Saving BEST model to {config['experiment_path']}")
                 torch.save(nodes.encoder.state_dict(), config['experiment_path']+'node_encoder')
                 torch.save(edges.encoder.state_dict(), config['experiment_path']+'edge_encoder')
                 torch.save(model.model.state_dict(), config['experiment_path']+'model')
                 torch.save(model.decoder.state_dict(), config['experiment_path']+'decoder')
-
+                json.dump({'best_m': best_m}, open(config['experiment_path']+'best_m.json', 'w'))
 
     if 'classification' in config['task']:
         if val_m > best_m:
             best_m = val_m
             wandb.log({"best_test_f1": te_m}, step=epoch)
+
+            if args.save_model:
+                logging.info(f"Saving BEST model to {config['experiment_path']}")
+                torch.save(nodes.encoder.state_dict(), config['experiment_path']+'node_encoder')
+                torch.save(edges.encoder.state_dict(), config['experiment_path']+'edge_encoder')
+                torch.save(model.model.state_dict(), config['experiment_path']+'model')
+                torch.save(model.decoder.state_dict(), config['experiment_path']+'decoder')
+                json.dump({'best_m': best_m}, open(config['experiment_path']+'best_m.json', 'w'))
+
+    logging.info(f"Saving checkpoint to {config['experiment_path']}{epoch}/")
+    os.mkdir(config['experiment_path']+str(epoch))
+    torch.save(nodes.encoder.state_dict(), config['experiment_path']+str(epoch)+'/node_encoder')
+    torch.save(edges.encoder.state_dict(), config['experiment_path']+str(epoch)+'/edge_encoder')
+    torch.save(model.model.state_dict(), config['experiment_path']+str(epoch)+'/model')
+    torch.save(model.decoder.state_dict(), config['experiment_path']+str(epoch)+'/decoder')
+    if epoch > 0:
+        shutil.rmtree(config['experiment_path']+str(epoch-1), ignore_errors=True)
