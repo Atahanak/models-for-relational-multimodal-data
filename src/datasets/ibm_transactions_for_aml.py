@@ -5,6 +5,7 @@ import torch_frame
 from torch_geometric.sampler import EdgeSamplerInput, NodeSamplerInput
 from torch_frame import stype
 from torch_frame.nn import (
+    ProjectionEncoder,
     EmbeddingEncoder,
     LinearEncoder,
     TimestampEncoder,
@@ -300,13 +301,13 @@ class IBMTransactionsAMLNodes(torch_frame.data.Dataset):
 
         self.df.reset_index(inplace=True)
         col_to_stype = {
-            'node_attr': stype.numerical,
+            'node_attr': stype.relation,
         }
         self.masked_numerical_columns = []
         self.masked_categorical_columns = []
         if ego:
             self.df['ego'] = 1
-            col_to_stype['ego'] = stype.numerical
+            col_to_stype['ego'] = stype.relation
         super().__init__(self.df, col_to_stype)
     
     def init_encoder(self, channels):
@@ -314,5 +315,5 @@ class IBMTransactionsAMLNodes(torch_frame.data.Dataset):
             channels,
             self.col_stats,
             self.tensor_frame.col_names_dict,
-            {stype.numerical: LinearEncoder()}
+            {stype.relation: ProjectionEncoder()}
         )

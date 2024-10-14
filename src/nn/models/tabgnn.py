@@ -10,8 +10,6 @@ from torch.nn import (
     Linear,
     Module, 
     ReLU, 
-    LeakyReLU,
-    Dropout,
     Sequential, 
     ModuleList,
     Parameter,
@@ -21,7 +19,7 @@ from torch.nn import (
 from torch_geometric.nn import PNAConv
 from torch_geometric.nn import BatchNorm
 
-from ..gnn.model import PNAConvHetero
+from ..gnn.pna import PNAConvHetero
 
 import logging
 logger = logging.getLogger(__name__)

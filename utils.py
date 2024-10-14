@@ -2,20 +2,18 @@ import os
 import logging
 import sys
 import argparse
-from datetime import datetime
 import os 
 import os.path as osp 
 
-from torch_frame.nn.encoder.stypewise_encoder import StypeWiseFeatureEncoder
 import torch 
 import torch.nn as nn
 
-from src.nn.gnn.model import GINe, PNAS, CPNA, CPNATAB
-from src.nn.models import FTTransformer#, Trompt
+from nn.gnn import GINe, PNAS, CPNA, CPNATAB
+from src.nn.models import FTTransformer
 from src.nn.gnn.decoder import ClassifierHead, NodeClassificationHead
 from src.nn.decoder import MCMHead
 from src.nn.models import TABGNN
-from src.nn.models import TABGNNFused
+from src.nn.models import TABGNNFused, TABGNNInterleaved
 
 def logger_setup():
     # Setup logging
@@ -42,13 +40,15 @@ def create_parser():
     parser.add_argument("--batch_size", default=200, type=int, help="Select the batch size for GNN training")
     parser.add_argument("--epochs", default=100, type=int, help="Select the number of epochs for GNN training")
     parser.add_argument('--num_neighs', nargs='+', type=int, default=[100,100], help='Pass the number of neighors to be sampled in each hop (descending).')
-    
+    parser.add_argument("--n_hidden", default=32, type=int, help="Number of hidden units in the GNN model", required=False)
+    parser.add_argument("--n_gnn_layers", default=2, type=int, help="Number of GNN layers in the model", required=False)
+    parser.add_argument("--model", default=None, type=str, help="Select the model architecture. Needs to be one of [gin, gat, rgcn, pna]", required=True)
+    parser.add_argument("--freeze", action="store_true", help="freeze model parameters for tabular backbone", required=False)
 
     #Misc
     parser.add_argument("--seed", default=1, type=int, help="Select the random seed for reproducability")
     parser.add_argument("--tqdm", action='store_true', help="Use tqdm logging (when running interactively in terminal)")
     parser.add_argument("--data", default=None, type=str, help="Select the AML dataset. Needs to be either small or medium.", required=True)
-    parser.add_argument("--model", default=None, type=str, help="Select the model architecture. Needs to be one of [gin, gat, rgcn, pna]", required=True)
     parser.add_argument("--output_path", default="/mnt/data/outputs/", type=str, help="Output path to save the best models", required=False)
     parser.add_argument("--testing", action='store_true', help="Disable wandb logging while running the script in 'testing' mode.")
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
@@ -56,9 +56,6 @@ def create_parser():
     parser.add_argument("--checkpoint", action='store_true', help="Load checkpoint.")
     parser.add_argument("--wandb_dir", default="/mnt/data/wandb/", type=str, help="Wandb directory to save the logs", required=False)
     parser.add_argument("--group", default="null", type=str, help="wandb group", required=False)
-    parser.add_argument("--freeze", action="store_true", help="freeze model parameters for tabular backbone", required=False)
-    parser.add_argument("--n_hidden", default=32, type=int, help="Number of hidden units in the GNN model", required=False)
-    parser.add_argument("--n_gnn_layers", default=2, type=int, help="Number of GNN layers in the model", required=False)
     parser.add_argument("--task", default="edge_classification", type=str, help="Task to be performed by the model", required=False)
 
     return parser
@@ -307,11 +304,26 @@ class TABGNNS(nn.Module):
                 edge_dim=e_dim, 
                 deg=in_degree_histogram,
                 reverse_mp=config['reverse_mp'])
-            if config['load_model'] is not None:
-                logging.info(f"Loading model from {config['load_model']}")
-                model.load_state_dict(torch.load(config['load_model'] + 'model'))
+        elif config["model"] == "tabgnninterleaved":
+            if config['in_degrees'] is None:
+                raise ValueError("In degrees are not provided for PNA model!")
+            in_degrees = config['in_degrees']
+            max_in_degree = int(max(in_degrees))
+            in_degree_histogram = torch.zeros(max_in_degree + 1, dtype=torch.long)
+            in_degree_histogram += torch.bincount(in_degrees, minlength=in_degree_histogram.numel())
+            model = TABGNNInterleaved(
+                node_dim=n_dim, 
+                nhidden=config['n_hidden'], 
+                channels=config['n_hidden'], 
+                num_layers=config['n_gnn_layers'], 
+                edge_dim=e_dim, 
+                deg=in_degree_histogram,
+                reverse_mp=config['reverse_mp'])
         else:
             raise ValueError("Invalid model name!")
+        if config['load_model'] is not None:
+            logging.info(f"Loading model from {config['load_model']}")
+            model.load_state_dict(torch.load(config['load_model'] + 'model'))
         
         return model
 

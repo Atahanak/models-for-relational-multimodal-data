@@ -210,10 +210,9 @@ wandb.init(
 )
 
 config['experiment_path'] = args.wandb_dir + '/' + wandb.run.id + '/'
-if args.save_model:
-    if not os.path.exists(config['experiment_path']):
-        os.mkdir(config['experiment_path'])
-logging.info(config['experiment_path'])
+if not os.path.exists(config['experiment_path']):
+    logging.info(f"Creating experiment path {config['experiment_path']}")
+    os.mkdir(config['experiment_path'])
 logger_setup()
 
 if 'ethereum-phishing-transaction-network' in config['data']:
@@ -281,7 +280,7 @@ if 'node_classification' in config['task']:
 else:
     train_dataset, val_dataset, test_dataset = edges.split()
 
-if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnnfused' or config['model'] == 'cpna'  or config['model'] == "cpnatab":
+if config['model'] == 'pna' or config['model'] == 'tabgnn' or config['model'] == 'tabgnninterleaved' or config['model'] == 'tabgnnfused' or config['model'] == 'cpna'  or config['model'] == "cpnatab":
     edge_index = edges.train_graph.edge_index
     num_nodes = edges.train_graph.num_nodes
     config["in_degrees"] = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
@@ -318,7 +317,7 @@ if config['model'] == 'pna' or config['model'] == 'gin' or config['model'] == 'c
     model = GNN(
                 config
             ).to(device)
-elif config['model'] == 'tabgnn':
+elif config['model'] == 'tabgnn' or config['model'] == 'tabgnninterleaved':
     model = TABGNNS(
                 config
             ).to(device)
@@ -355,9 +354,10 @@ if 'mcm' in config['task']:
 else:
     best_m = -1
 if args.checkpoint:
-    best_m = json.load(open(config['experiment_path']+'best_m.json', 'r'))['best_m']
+    best_m = json.load(open(config['load_model']+'best_m.json', 'r'))['best_m']
 
 for epoch in range(start, start+config['epochs']):
+    logging.info(f"Epoch: {epoch}")
     train_m = train(epoch, train_loader, dataset, model, device, args, 'train', config)
     val_m = evaluate(epoch, val_loader, dataset, model, device, args, 'val', config)
     te_m = evaluate(epoch, test_loader, dataset, model, device, args, 'test', config)
@@ -393,7 +393,6 @@ for epoch in range(start, start+config['epochs']):
                 torch.save(edges.encoder.state_dict(), config['experiment_path']+'edge_encoder')
                 torch.save(model.model.state_dict(), config['experiment_path']+'model')
                 torch.save(model.decoder.state_dict(), config['experiment_path']+'decoder')
-                json.dump({'best_m': best_m}, open(config['experiment_path']+'best_m.json', 'w'))
 
     logging.info(f"Saving checkpoint to {config['experiment_path']}{epoch}/")
     os.mkdir(config['experiment_path']+str(epoch))
@@ -401,5 +400,6 @@ for epoch in range(start, start+config['epochs']):
     torch.save(edges.encoder.state_dict(), config['experiment_path']+str(epoch)+'/edge_encoder')
     torch.save(model.model.state_dict(), config['experiment_path']+str(epoch)+'/model')
     torch.save(model.decoder.state_dict(), config['experiment_path']+str(epoch)+'/decoder')
+    json.dump({'best_m': best_m}, open(config['experiment_path']+str(epoch)+'/best_m.json', 'w'))
     if epoch > 0:
         shutil.rmtree(config['experiment_path']+str(epoch-1), ignore_errors=True)

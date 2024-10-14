@@ -31,7 +31,6 @@ class NodeClassificationHead(nn.Module):
     def forward(self, x):
         return self.mlp(x)
 
-
 class LinkPredHead(torch.nn.Module):
     """Readout head for link prediction.
 
