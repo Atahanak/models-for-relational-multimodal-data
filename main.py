@@ -270,7 +270,7 @@ nodes = dataset.nodes
 edges = dataset.edges
 if config['load_model'] is not None:
     logging.info(f"Loading encoders from {config['load_model']}")
-    nodes.encoder.load_state_dict(torch.load(config['load_model']+'node_encoder'))
+    nodes.encoder.load_state_dict(torch.load(config['load_model']+'node_encoder'), strict=False)
     edges.encoder.load_state_dict(torch.load(config['load_model']+'edge_encoder'))
 config['node_encoder'] = nodes.encoder
 config['edge_encoder'] = edges.encoder
