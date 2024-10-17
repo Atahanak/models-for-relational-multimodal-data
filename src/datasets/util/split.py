@@ -11,13 +11,31 @@ def apply_split(df: pd.DataFrame, split_type: str, splits: list, timestamp_col: 
         df = temporal_balanced_split(df, splits, timestamp_col)
     elif split_type == 'temporal':
         df = temporal_split(df, splits, timestamp_col)
+    elif split_type == 'cutoff':
+        df = cutoff_split(df, splits, timestamp_col)
     else:
         df = random_split(df, splits)
     return df
 
 
 def random_split(df: pd.DataFrame, splits: list) -> pd.DataFrame:
+    # generate a random number for each row and assign it to the split column
     df['split'] = torch_frame.utils.generate_random_split(length=len(df), seed=0, train_ratio=splits[0], val_ratio=splits[1])
+    #df['split'] = np.random.choice(range(len(splits)), df.shape[0], p=splits)
+    return df
+
+def cutoff_split(df: pd.DataFrame, cutoffs: list, timestamp_col: str) -> pd.DataFrame:
+    # cutoffs is a list of timestamps that define the cutoffs for the splits
+    assert timestamp_col in df.columns
+    print(cutoffs)
+    df['split'] = 1
+    # mark the rows that are before the first cutoff as train
+    df.loc[df[timestamp_col] < cutoffs[0], 'split'] = 0
+    # mark the rows that are after the last cutoff as test
+    df.loc[df[timestamp_col] > cutoffs[-1], 'split'] = 2
+    print(len(df[df['split'] == 0]))
+    print(len(df[df['split'] == 1]))
+    print(len(df[df['split'] == 2]))
     return df
 
 

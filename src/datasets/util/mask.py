@@ -40,11 +40,16 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
     if not pretrain:
         # !!! self.df['Is Laundering'] column stores strings "0" and "1".
         #self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)]) + self.df['link'] 
-        self.df['target'] = self.df.apply(lambda row: [float(row[supervised_col])] + row['link'], axis=1)
+        if 'link' in self.df.columns:
+            self.df['target'] = self.df.apply(lambda row: [float(row[supervised_col])] + row['link'], axis=1)
+        else:
+            self.df['target'] = self.df[supervised_col].apply(lambda x: [float(x)])
         self.target_col = 'target'
         col_to_stype['target'] = torch_frame.relation
-        self.df = self.df.drop(columns=['link'])
-        del col_to_stype['link']
+        if 'link' in col_to_stype:
+            del col_to_stype['link']
+        if 'link' in self.df.columns:
+            self.df = self.df.drop(columns=['link'])
         return col_to_stype
 
     # Handle pretrain columns
@@ -66,6 +71,11 @@ def set_target_col(self: torch_frame.data.Dataset, pretrain: set[PretrainType],
         self.target_col = 'link'
         if 'mask' in col_to_stype:
             del col_to_stype['mask']
+    elif supervised_col is not None:
+        self.df['target'] = self.df['target'] + self.df[supervised_col]
     else:
         self.target_col = ''
+    
+    # if supervised_col is not None:
+    #     self.df['target'] = self.df['target'] + self.df[supervised_col]
     return col_to_stype

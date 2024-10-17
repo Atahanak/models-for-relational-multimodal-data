@@ -12,7 +12,6 @@ from transformers import (AutoModel, AutoModelForSequenceClassification,
 
 import evaluate
 
-
 def read_dataset(args):
     df = pd.read_csv(args.root)
     df = df[["reviewText", "overall", "summary"]]

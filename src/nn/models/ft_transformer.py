@@ -58,8 +58,9 @@ class FTTransformer(Module):
         channels: int,
         #out_channels: int,
         num_layers: int,
-        encoder,
-        decoder
+        nhead:int = 8,
+        # encoder,
+        # decoder
         # col_stats: dict[str, dict[StatType, Any]],
         # col_names_dict: dict[torch_frame.stype, list[str]],
         # stype_encoder_dict: dict[torch_frame.stype, StypeEncoder] | None = None,
@@ -70,8 +71,8 @@ class FTTransformer(Module):
             raise ValueError(
                 f"num_layers must be a positive integer (got {num_layers})")
         
-        self.encoder = encoder
-        self.decoder = decoder
+        #self.encoder = encoder
+        #self.decoder = decoder
 
         # if stype_encoder_dict is None:
         #     stype_encoder_dict = {
@@ -87,7 +88,8 @@ class FTTransformer(Module):
         # )
         
         self.backbone = FTTransformerConvs(channels=channels,
-                                           num_layers=num_layers)
+                                           num_layers=num_layers,
+                                           nhead=nhead)
         
         # if pretrain:
         #     num_numerical = len(col_names_dict[stype.numerical])
@@ -117,11 +119,11 @@ class FTTransformer(Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.encoder.reset_parameters()
+        #self.encoder.reset_parameters()
         self.backbone.reset_parameters()
-        self.decoder.reset_parameters()
+        #self.decoder.reset_parameters()
 
-    def forward(self, tf: TensorFrame) -> Tensor:
+    def forward(self, x) -> Tensor:
         r"""Transforming :class:`TensorFrame` object into output prediction.
 
         Args:
@@ -131,7 +133,7 @@ class FTTransformer(Module):
         Returns:
             torch.Tensor: Output of shape [batch_size, out_channels].
         """
-        x, _ = self.encoder(tf)
+        #x, _ = self.encoder(tf)
         x, x_cls = self.backbone(x)
         return x, x_cls
         # if self.pretrain:

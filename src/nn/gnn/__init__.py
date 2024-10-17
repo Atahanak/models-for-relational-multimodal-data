@@ -1,7 +1,5 @@
 r"""GNN models"""
-from .model import *
+from .pna import *
+from .gine import *
 from .utils import *
-
-__all__ = classes = [
-    'gnn',
-]
+from .conv import *
